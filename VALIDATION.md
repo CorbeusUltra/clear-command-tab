@@ -1,0 +1,99 @@
+# Validation
+
+Target: Apple silicon Mac, macOS 27.0.1 (26A434), Apple Swift 6.4.
+
+## Version 0.3.4: selection contrast on bright backdrops
+
+- The user reported that selection becomes indistinguishable on a white backdrop. The previous custom indicator drew `labelColor` at 16% opacity; in dark appearance this is white, so it provides no contrast over white content beneath clear glass.
+- Replaced that custom fill with a single AppKit `NSVisualEffectView` using `.selection`, `.withinWindow`, `.active`, and `isEmphasized = false`. It sits behind the icon cells, follows the selected tile, uses the same rounded geometry, and scrolls with the row. Icon artwork and badges are not made vibrant. Public clear glass and key-window handling are unchanged.
+- Release bundle build and strict signature verification passed. No core-model behavior changed.
+- A comparison harness was prepared for white and black backdrops. Computer Use repeatedly failed with `cgWindowNotFound`, including when targeting the installed app; a native window diagnostic confirmed the temporary window was onscreen. No successful screenshot was obtained, so visual contrast improvement is **not yet verified**.
+- Installation and the user's live white-background confirmation are pending. The existing installed 0.3.3 remains in place until it is quit for replacement.
+
+## Version 0.3.3: active public clear glass and larger badges
+
+- The user confirmed that the existing public-clear panel still rendered incorrectly and asked for larger badges. A controlled behind-window comparison of root, inset, and grouped layouts remained opaque in all three cases. Adding public behind-window visual-effect underlays (under-window, sidebar, HUD) did not resolve it either, as confirmed by the user.
+- A comparison holding the clear style/backdrop constant while changing key-window eligibility revealed the decisive difference: the user confirmed **Key .clear** displays the backdrop/refraction and changes when it loses key state. The final implementation uses the public `.clear` material and a nonactivating panel that can become key; it uses no private rendering method, underlay, or screenshot of the desktop.
+- A three-second GUI harness using the production `SwitcherPanel` verified that it becomes key, keeps the original NSWorkspace foreground application, dismisses successfully, releases key status, and preserves the original foreground application afterward. All five assertions passed. The harness appeared near the screen edge and exited automatically.
+- Badge diameter increased from 36 to 48 points for a 144-point tile (+33%); text increased from 23 to 30 points. Minimum badge/text sizes increase accordingly for dense layouts, and badges remain constrained to their cells.
+- Version 0.3.3 release build and strict signature verification passed. The installed GUI reports **Ready** after refreshing only VisibleTab's existing permission entry. Settings windows were closed. All diagnostic processes are stopped and their temporary sources/bundles/reports were moved to Trash.
+- Physical keyboard checks of Command release, Escape, and an unrelated shortcut after cancellation remain necessary because tool-injected events bypass the global tap. Final installed appearance requires a live user check.
+
+## Version 0.3.2: public clear glass
+
+- The user reported a white-point artifact and insufficient native refraction with the internal profile. A controlled public-API comparison showed `.regular` and `.clear` on the same striped in-window backdrop: both refracted the edges, while `.clear` preserved the center detail and produced pronounced edge lensing. The user explicitly selected **public .clear**.
+- The comparison window appeared near a screen edge, not in the center, and automatically exited after six seconds. The observed refraction belongs to this controlled in-window case; production behind-window appearance remains a separate live check.
+- Removed the private glass implementation entirely (source moved to Trash). Production uses plain `NSGlassEffectView`, `.clear`, nil tint, and default noninteractive state. No private selectors or global preference mapping remain. Badges, adaptive size, and pointer-motion gating are retained.
+- Release build and strict signature verification passed; 0.3.2 is installed at the existing path. Only VisibleTab's permission entry was renewed; its GUI reported **Ready**. Settings windows were closed and the disposable comparison app/source moved to Trash. Production visual confirmation is pending.
+- The previous assertion that private methods were necessary for refraction was too strong: Apple's public API supplies refraction, demonstrated by the comparison above. An exact match to Apple's private switcher is not guaranteed.
+
+## Version 0.3.1: extended clear compositor and badge styling
+
+- The user confirmed 0.3.0 pointer behavior and visible notification badges, but reported that public Liquid Glass and badge styling still differed from Apple. The user explicitly approved private rendering methods to prioritize visual fidelity.
+- Runtime introspection on macOS 27 verified the names and integer argument/return encodings of four glass properties. The minimum global tint now enables the internal clear compositor (variant 13, interaction 1, scrim 0, subdued 0). A no-window probe instantiated the production view and verified these values before and after layout without displaying an overlay.
+- The profile is limited to the verified major OS and checked method signatures. Unsupported runtimes use public regular glass. Nonzero system tint and Reduce Transparency/Increase Contrast retain the standard material. Preferences are refreshed when a new panel opens, with no idle polling or writes to system preferences.
+- Badges use larger circles and lighter number typography, an optical top-right anchor, a subtle red gradient/shadow, and no white outline. Wide labels and small icons remain inside their cells. These are custom badges; an exact match to Apple's private badge renderer is not claimed.
+- Version 0.3.1 release build and strict bundle-signature verification passed. The current bundle was installed at the same path, with the previous bundle moved to Trash. After the user completed Touch ID, only VisibleTab's permission entry was renewed; the installed GUI reported **Ready**. Settings windows were closed afterward.
+- The transparent compositor's actual appearance and revised badge styling still require live visual confirmation. No visual overlay was opened for development.
+
+## Version 0.3.0: system glass appearance, badges, and pointer selection
+
+- Replaced the forced clear variant with standard adaptive Liquid Glass, removed custom tint, and explicitly disabled clip-view background painting. The global Liquid Glass tint amount was observed as 0 and Reduce Transparency as disabled; no system preference was changed. Live visual matching remains to be confirmed.
+- Sixteen core checks pass in debug and release. New checks cover a stationary pointer beneath an opening/reframed panel, repeated stationary events after keyboard selection, real movement, jitter, session reset, and actual numeric/symbol badge labels.
+- The production badge reader queried the live Dock and returned `com.apple.reminders: "1"`, matching the user's report. Dock queries run on a background queue with bounded accessibility IPC and coalesced requests, once per second only during a selection. No idle badge timer or notification-content access was added.
+- Existing cells update badges without requiring application-list changes. Mouse tracking responds to movement rather than entry; clicks and accessibility presses still activate immediately.
+- Version 0.3.0 was installed at the existing application path, with the previous bundle moved to Trash. Release build, property list, and strict signature verification passed. The obsolete VisibleTab permission entry was replaced with the current bundle without changing permission scope; the installed GUI reported **Ready**.
+- No preview overlay was opened during this revision. Actual held-key pointer behavior, badge rendering, and Liquid Glass transparency require a live user check because synthesized automation bypasses the global event tap.
+
+## Version 0.2.0: native glass and adaptive layout
+
+- Native `NSGlassEffectView` clear material is used on macOS 26+, with the actual content owned by the effect view; macOS 14–15 uses the existing fallback. No fake glass image or private API is used.
+- The selected caption follows its icon; optical icon padding is no longer applied twice. Panel, selection, margins, and icon sizes were adjusted toward the native switcher.
+- Fourteen model/layout checks pass in debug and release. New cases cover width growth with app count, simultaneous icon/height reduction for dense rows, overflow only after the minimum icon size, bounded captions at both edges and after scrolling, small screens, and zero apps.
+- The three-icon light preview was rendered and visually inspected on the target Mac. It measured 528 by 210 logical points, with correctly positioned caption and rounded glass boundary. Other icon counts are covered by layout checks; dark/dense live screenshots were not completed.
+- The preview was stopped immediately when the user reported it obscured the desktop. All previews now automatically exit after six seconds (a developer override is bounded to 2–30 seconds). No further overlays were opened after that request.
+- The generated preview bundles and downloaded visual reference were moved to Trash after testing.
+- Release bundle builds and code-signature verification passed. Installation and renewed Accessibility status are checked separately below.
+- Version 0.2.0 installed at the original application path; the previous bundle was moved to Trash. All generated preview processes are stopped. GUI launch requests renewed Accessibility permission after recompilation, even though terminal-launched diagnostics report trust inherited from their launch context. The actual GUI status is the authoritative check.
+- Permission repair completed: `tccd` logged a mismatch between the 0.1 and 0.2 code requirements, which persisted after toggling the existing entry and restarting. The user completed Touch ID. Only VisibleTab's obsolete permission entry was removed, then the current bundle was added through System Settings. **Check permission** returned **Ready**, confirming the installed GUI process's event tap is active. No additional permission scope was requested.
+- On the target macOS 27 installation, the permission page is named **Device Control and Data Access** under Privacy & Security. The existing `Privacy_Accessibility` deep link opens that page.
+
+## Version 0.1.0 checks (historical)
+
+- Release application built successfully with Command Line Tools only, without third-party dependencies.
+- Installed at `/Users/lucas/Applications/VisibleTab.app`; bundle structure, property list, and ad hoc signature verified.
+- Ten executable model checks passed in both debug and release builds with zero failed assertions: strict hidden filter, regular/self exclusions, remembered MRU order, hide/unhide and termination, repeated quick switching, reverse/wrap navigation, an accessory/hidden foreground app, selection removal, live reconciliation, empty/single lists, and consumed key-up ownership.
+- Settings window rendered and visually inspected. The permission status, optional menu bar icon, Pause/Quit, and initially disabled Launch at login controls are present and fit the window.
+- Disposable test apps A and B built for safe live Hide/Quit/minimize/windowless checks. These have no user documents or saved data.
+
+## Version 0.1.0 live checks (historical)
+
+- Accessibility permission granted by the user; the installed app reports **Ready** and the event tap is enabled.
+- AltTab quit without changing its preferences. Its existing Launch at login setting remains enabled; avoid launching both switchers on the same shortcut.
+- The user confirmed that a held Command-Tab displays the panel, hidden apps are absent, and releasing Command switches to the selected app.
+- The panel was rendered in an isolated preview and visually inspected: one row of correctly rendered app icons, a selection background, and the selected app's name. Hidden apps were excluded.
+- Disposable app A was hidden through its native Hide menu. The read-only diagnostic confirmed `hidden: true`; its icon disappeared from the preview while app B remained.
+- App B remained in the preview after its window was minimized and after its only window was closed. The test app intentionally stays running without windows.
+- Pause changed the status to **Paused**; Resume recreated the event tap and returned to **Ready**.
+- The menu icon setting was toggled off, the settings closed and reopened successfully, then the icon setting restored to its initial on state. Reopening retained a single installed instance.
+- Both disposable apps and the isolated preview were quit. Their generated bundles were moved to Trash; the fixture build script can recreate them.
+
+The automation tool's synthesized keyboard shortcuts did not exercise the global event tap reliably, so the live keyboard confirmation above is user-observed. App state, panel contents, and settings controls were checked separately.
+
+## Version 0.1.0 performance (historical)
+
+- Installed release executable: approximately 268 KiB on disk, excluding the icon and system frameworks.
+- `vmmap -summary` reported a **29.0 MiB physical footprint**, with **32.5 MiB peak**, after the live checks. RSS varies with memory compression and is not used as the primary memory figure.
+- Final 30-second observation: nine CPU samples at 0.0%, one transient sample at 0.5%; cumulative CPU time rose from 9.40 to 9.42 seconds (approximately 0.02 seconds consumed). This is an observation on this Mac, not a resource-use guarantee.
+- Earlier observations overlapped onboarding and UI tests and are not treated as idle measurements.
+- The intentional panel delay is 150 ms. Keyboard-to-activation latency has not been instrumented or quantified; the user confirmed successful switching.
+
+## Remaining scenarios
+
+- Live repeated quick Command-Tab, Shift-Tab, Escape, arrows, hover/click, and H/Q within a held selection; these routes are implemented, with model-level coverage where applicable.
+- Live reappearance after unhide and activation of minimized/windowless apps without restoration; the filter and use of activation rather than reopen are verified in code.
+- Native fallback during missing/revoked permission or interception loss, beyond the observed first-launch onboarding state.
+- Space changes, fullscreen, multiple displays, Secure Input, revoked permission, sleep/wake.
+- Launch at login registration, approval, and an actual subsequent login. Autostart remains disabled until the user enables it.
+
+The app is a native approximation of Apple's panel, with its own observed history. A first run cannot reproduce Apple's private historical ordering. Ad hoc signing may require renewed Accessibility approval after updates.
