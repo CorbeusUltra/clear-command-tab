@@ -13,7 +13,7 @@ zsh scripts/install-app.sh
 open /Users/lucas/Applications/VisibleTab.app
 ```
 
-The installer refuses to replace a running instance. An existing installation is moved to the macOS Trash before replacement. The app is signed ad hoc for local use; it is not notarized for distribution. A rebuild can require renewed Accessibility permission.
+The installer refuses to replace a running instance. An existing installation is moved to the macOS Trash before replacement. The app is signed with the existing local Apple Development certificate through `scripts/sign-app.sh`. The certificate, bundle identifier, and installed path are kept stable across updates; the installer never silently falls back to ad hoc signing. The migration from the earlier ad hoc identity requires one renewed Accessibility grant. Subsequent builds should retain that grant as long as their designated requirement remains compatible. This is a local development app, not a notarized distribution build.
 
 ## First launch
 
@@ -24,7 +24,7 @@ The installer refuses to replace a running instance. An existing installation is
 
 No Screen Recording permission is needed: VisibleTab uses app icons and window bounds, not screenshots or window contents. It does not access the network or record typed text.
 
-On macOS 27, the permission page is named **Device Control and Data Access** under **Privacy & Security**; the app's permission button opens it directly. Following an ad hoc rebuild, an enabled switch can still reference the old binary signature. If toggling it and restarting do not restore **Ready**, select only VisibleTab in that list, remove its permission entry, then use **Add** to select `/Users/lucas/Applications/VisibleTab.app` and enable the current app. This removes a permission record, not the app or its files.
+On macOS 27, the permission page is named **Device Control and Data Access** under **Privacy & Security**; the app's permission button opens it directly. When migrating from an old ad hoc build to the stable signed identity, an enabled switch can still reference the old binary signature. If toggling it and restarting do not restore **Ready**, select only VisibleTab in that list, remove its permission entry, then use **Add** to select `/Users/lucas/Applications/VisibleTab.app` and enable the current app. This removes a permission record, not the app or its files.
 
 ## Controls
 
@@ -103,7 +103,7 @@ The pre-update sources and installed app are preserved at:
 
 For a visual rollback, choose **Settings → Glass → Current**; no rebuild or permission renewal is needed. For a full rollback, quit VisibleTab, move the installed bundle to Trash with `/usr/bin/trash -s /Users/lucas/Applications/VisibleTab.app`, then copy the backed-up `VisibleTab.app` to `/Users/lucas/Applications/`. `source/` preserves the complete source before this update.
 
-After installing a rebuild, the user renews Accessibility permission themselves and clicks **Check permission**. The implementation workflow stops at this handoff; it does not automate System Settings or authentication. Physical shortcut tests and Current/AltTab visual comparison happen afterward.
+During the one-time migration from ad hoc signing, the user renews Accessibility themselves and clicks **Check permission**. Later updates preserve the signing identity and should not require that manipulation. Check the installed app's actual Ready status; terminal diagnostics inherit their launch context and are not proof of the installed app's grant. Any required Settings/authentication remains a manual user handoff.
 
 ## Version 0.4.1 responsiveness fix
 
@@ -130,3 +130,13 @@ Hidden commits now register a one-shot acknowledgement gate before calling `unhi
 The gate resumes once, ignores unrelated or duplicate notices, and is discarded on cancellation, superseding selection, or the existing 800 ms deadline. It never schedules a late activation after cancellation. The approved glass and panel files are unchanged. A bounded set of unified-log entries under subsystem `local.lucas.VisibleTab`, category `RevealFocus`, records only hidden-commit stages, native/AX result codes, process/window IDs, cancellation, and confirmation; no key contents, document titles, screenshots, or notification contents are logged. These entries make another failed user test diagnosable without guessing the missing stage.
 
 The 0.4.2 app/source backup is `/Users/lucas/Documents/code/all/visible-tab-backups/20261014-223317-before-0.4.3/`. After installation, the user renews Accessibility themselves before the physical-keyboard acceptance check. Compilation, synchronization tests, and the old-version trace do not establish that the new focus behavior is fixed at runtime.
+
+## Version 0.4.4 observed reveal and stable signing
+
+The 0.4.3 user-test log contained a reveal request followed two milliseconds later by `complete success=false`, with no acknowledgement, native front, key-window, or AX Raise entries. This identifies the early reveal guard as the failed stage, rather than a completed focus request being overridden. The old code aborted when Cocoa's `unhide()` returned false, although the user observed the app reappearing.
+
+Reveal now writes the public application `AXHidden` attribute to false on the focus queue. Actual AX hidden-state observations or the matching unhide notification release the existing one-shot gate. If that attribute is unsupported, Cocoa unhide remains a fallback, but its negative advisory return no longer discards a subsequently observed reveal. A few bounded readiness reads run only for the pending reveal, under the same cancellation/revision checks and 800 ms deadline. No late reactivation retry, document reopening, or restoration of minimized windows is added. Existing visible-app/window paths and the approved rendering are unchanged.
+
+Earlier builds used `codesign --sign -`: their designated requirement was the changing executable code hash. Updates now use the existing valid Apple Development certificate, pinned by public certificate fingerprint in `scripts/sign-app.sh` (override: `VISIBLETAB_SIGNING_IDENTITY`). Private key material is neither exported nor changed. This script refuses the ad hoc pseudo-identity and fails if the configured certificate cannot sign. Default certificate-based requirements remain stable when the program changes. Two separately compiled and signed probe programs had different code hashes and identical designated requirements; the second passed `codesign --verify -R` against the first's requirement. Report: `.build/SigningProbe/report.json`. This validates code-identity continuity, not a live TCC update before the initial migration grant. [Apple's code signing identity guidance](https://developer.apple.com/library/archive/technotes/tn2206/) explains how designated requirements identify updates.
+
+The 0.4.3 source/app backup is `/Users/lucas/Documents/code/all/visible-tab-backups/20261014-231206-before-0.4.4/`. One final manual Accessibility renewal is expected when moving from the old hash-based identity to the certificate-based identity. Future normal updates should preserve permission; this must still be confirmed by the installed app's Ready status after such an update, rather than by a trusted terminal diagnostic.

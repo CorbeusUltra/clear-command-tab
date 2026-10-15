@@ -60,6 +60,11 @@ private struct FocusDispatch: Sendable {
     var expectedWindow: SwitcherTargetID?
 }
 
+private struct RevealDispatch: Sendable {
+    let error: Int32
+    let hidden: Bool?
+}
+
 private struct FocusObservation: Sendable {
     var appPID: Int32?
     var window: SwitcherTargetID?
@@ -70,6 +75,26 @@ private enum FocusActions {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
         return value as? T
+    }
+
+    static func hidden(pid: Int32, ticket: FocusTicket) -> Bool? {
+        guard ticket.valid else { return nil }
+        let application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, 0.025)
+        return value(application, kAXHiddenAttribute)
+    }
+
+    static func reveal(pid: Int32, ticket: FocusTicket) -> RevealDispatch {
+        guard ticket.valid else { return .init(error: AXError.cannotComplete.rawValue, hidden: nil) }
+        let application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, 0.025)
+        let before: Bool? = value(application, kAXHiddenAttribute)
+        if before == false { return .init(error: AXError.success.rawValue, hidden: false) }
+        guard ticket.valid else { return .init(error: AXError.cannotComplete.rawValue, hidden: nil) }
+        let result = AXUIElementSetAttributeValue(application, kAXHiddenAttribute as CFString, kCFBooleanFalse)
+        let after: Bool? = ticket.valid ? value(application, kAXHiddenAttribute) : nil
+        revealLog.notice("AX reveal pid=\(pid) result=\(result.rawValue) before=\(String(describing: before), privacy: .public) after=\(String(describing: after), privacy: .public)")
+        return .init(error: result.rawValue, hidden: after)
     }
 
     static func appWindow(pid: Int32, ticket: FocusTicket) -> TrackedWindow? {
@@ -240,29 +265,69 @@ final class FocusCoordinator {
             revealGate.wait(for: target.pid)
             pendingReveal = request
         }
-        let accepted = ApplicationSwitch.commit(revealHidden: revealHidden, isHidden: wasHidden,
-                                               isTerminated: app.isTerminated, unhide: { app.unhide() },
-                                               activate: { true })
-        guard accepted else {
+        guard !app.isTerminated, !wasHidden || revealHidden else {
             complete(revision, ticket: ticket, observed: nil, target: target, completion: completion)
             return
         }
-        if tracingReveal {
-            // Cocoa refreshes isHidden on a later main-run-loop turn. This fast path
-            // covers an app already revealed externally or a missing notification;
-            // unlike the old code, it never reads the stale bit in the unhide turn.
+        if tracingReveal { requestReveal(request) }
+        else { enqueue(request, revealed: false) }
+    }
+
+    private func requestReveal(_ request: PendingReveal) {
+        queue.async { [weak self] in
+            let result = FocusActions.reveal(pid: request.target.pid, ticket: request.ticket)
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.policy.isCurrent(revision), ticket.valid, !app.isHidden else { return }
-                self.acknowledgeUnhide(target.pid)
+                guard let self, self.policy.isCurrent(request.revision), request.ticket.valid,
+                      self.pendingReveal != nil else { return }
+                if self.revealGate.observe(pid: request.target.pid, hidden: result.hidden) {
+                    self.resumeReveal(request)
+                } else {
+                    if [AXError.attributeUnsupported.rawValue, AXError.notImplemented.rawValue].contains(result.error),
+                       !request.app.isTerminated {
+                        let sent = request.app.unhide()
+                        revealLog.notice("Cocoa reveal fallback pid=\(request.target.pid) returned=\(sent)")
+                        // The user's trace showed unhide=false while the app actually
+                        // reappeared. Do not abandon focus on that return value: wait
+                        // for a real notification/AX observation, within this intent.
+                    }
+                    self.observeReveal(request, attempt: 0)
+                }
             }
-        } else { enqueue(request, revealed: false) }
+        }
+    }
+
+    private func observeReveal(_ request: PendingReveal, attempt: Int) {
+        guard policy.isCurrent(request.revision), request.ticket.valid, pendingReveal != nil else { return }
+        queue.async { [weak self] in
+            let hidden = FocusActions.hidden(pid: request.target.pid, ticket: request.ticket)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.policy.isCurrent(request.revision), request.ticket.valid,
+                      self.pendingReveal != nil else { return }
+                if self.revealGate.observe(pid: request.target.pid, hidden: hidden) {
+                    self.resumeReveal(request)
+                } else {
+                    // Readiness probes only while revealing, never idle polling or
+                    // retries of the focus action itself. The overall deadline remains.
+                    let delays = [0.01, 0.02, 0.04, 0.08, 0.16]
+                    if attempt < delays.count {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delays[attempt]) { [weak self] in
+                            self?.observeReveal(request, attempt: attempt + 1)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private func acknowledgeUnhide(_ pid: Int32) {
         guard let request = pendingReveal, request.ticket.valid,
               policy.isCurrent(request.revision), revealGate.acknowledge(pid) else { return }
+        resumeReveal(request)
+    }
+
+    private func resumeReveal(_ request: PendingReveal) {
         pendingReveal = nil
-        revealLog.notice("acknowledged pid=\(pid) revision=\(request.revision)")
+        revealLog.notice("acknowledged pid=\(request.target.pid) revision=\(request.revision)")
         // Let the current notification finish before asking the app for its now-live
         // window. This is a run-loop handoff, not an arbitrary display/focus delay.
         DispatchQueue.main.async { [weak self] in self?.enqueue(request, revealed: true) }

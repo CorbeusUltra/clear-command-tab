@@ -12,6 +12,10 @@ public struct ApplicationRevealGate: Sendable {
         self.pid = nil
         return true
     }
+    public mutating func observe(pid: Int32, hidden: Bool?) -> Bool {
+        guard hidden == false else { return false }
+        return acknowledge(pid)
+    }
 }
 
 public enum FocusConfirmation {

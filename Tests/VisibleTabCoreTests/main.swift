@@ -22,6 +22,7 @@ let interactionChecks = PointerAndBadgeTests()
 let modeChecks = MultiModeTests()
 let focusChecks = FocusIntentTests()
 let cases: [(String, () -> Void)] = [
+    ("reveal observes real state despite a negative advisory return", focusChecks.testRevealUsesObservedStateRatherThanRequestReturnValue),
     ("reveal waits for the selected app and resumes once", focusChecks.testRevealWaitsForSelectedAppAndOnlyRunsOnce),
     ("cancelled or superseded reveal cannot resume", focusChecks.testCancelledOrSupersededRevealCannotResume),
     ("revealed window requires real keyboard and exact window focus", focusChecks.testRevealedWindowNeedsBothRealKeyboardAndWindowFocus),

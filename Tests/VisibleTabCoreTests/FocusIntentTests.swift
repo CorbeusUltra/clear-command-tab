@@ -30,6 +30,22 @@ final class FocusIntentTests {
         expectTrue(policy.isCurrent(latest))
     }
 
+    func testRevealUsesObservedStateRatherThanRequestReturnValue() {
+        var gate = ApplicationRevealGate()
+        gate.wait(for: 1)
+        let cocoaRequestAccepted = false
+        expectFalse(cocoaRequestAccepted)
+        expectFalse(gate.observe(pid: 1, hidden: nil))
+        expectFalse(gate.observe(pid: 1, hidden: true))
+        expectFalse(gate.observe(pid: 2, hidden: false))
+        // A negative advisory return must not discard an actual observed reveal.
+        expectTrue(gate.observe(pid: 1, hidden: false))
+        expectFalse(gate.acknowledge(1))
+        gate.wait(for: 1)
+        gate.cancel()
+        expectFalse(gate.observe(pid: 1, hidden: false))
+    }
+
     func testRevealedWindowNeedsBothRealKeyboardAndWindowFocus() {
         let app = SwitcherTargetID.application(1)
         expectFalse(FocusConfirmation.matches(target: app, expectedWindow: a,
