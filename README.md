@@ -17,6 +17,17 @@ open /Users/lucas/Applications/ClearCommandTab.app
 
 The installer refuses to replace a running instance. An existing installation (including the former `VisibleTab.app`) is moved to the macOS Trash before replacement. The app is signed with the existing local Apple Development certificate through `scripts/sign-app.sh`. The certificate and bundle identifier are kept stable across updates; the installer never silently falls back to ad hoc signing. The migration from the earlier ad hoc identity requires one renewed Accessibility grant. Subsequent builds should retain that grant as long as their designated requirement remains compatible. This is a local development app, not a notarized distribution build.
 
+## Local version history
+
+This project is a local Git repository on `main`. No remote is configured and nothing is published. Completed changes are recorded as local commits instead of creating another source/app backup directory for each update. Build outputs and app bundles are ignored.
+
+```sh
+git log --oneline --decorate
+git tag --list
+```
+
+The existing source snapshots were imported as tags `v0.3.4` and `v0.4.0` through `v0.4.6`. Each imported source file was checked against its original backup. The former expanded backup folders, including signed apps and restore notes, are preserved in `/Users/lucas/Documents/code/all/clear-command-tab-archives/visible-tab-backups-through-0.4.5.zip`. The pre-fix installed app is retained as `ClearCommandTab-0.4.6-build14.zip` in that directory. Compressed archives avoid advertising old app bundles to Spotlight. Historical paths in the release notes describe their original locations.
+
 ## First launch
 
 1. Quit other switchers that capture Command-Tab (such as AltTab).
@@ -166,3 +177,9 @@ The project folder is now `/Users/lucas/Documents/code/all/clear-command-tab`, a
 Option-Tab now uses the same 150 ms presentation gate as both app modes. A quick release still commits immediately; further navigation displays immediately. Window ordering and focus paths are unchanged.
 
 Settings uses native toolbar tabs (Settings, Guide, About), following the structure of [KeepingYouAwake's settings window](https://github.com/newmarcel/KeepingYouAwake/blob/main/KeepingYouAwake/Settings/KYASettingsWindow/KYASettingsWindow.m). About reads its version/build from the bundle. The glass choices are renamed fully transparent / original without changing the stored current / altTab values or either effect.
+
+## Version 0.4.7: reliable menu shortcut routing and local Git history
+
+Command-, and Command-Q have an explicit route while the status menu is open. When switching's event tap is active, matching key-downs, repeats and key-ups are consumed, the native menu is cancelled on its tracking run loop, and the requested action runs after menu dismissal. No key is reposted to the foreground app. Outside the menu, those shortcuts remain the foreground app's commands. The native [NSMenuDelegate key-equivalent callback](https://developer.apple.com/documentation/appkit/nsmenudelegate/menuhaskeyequivalent(_:for:target:action:)) also resolves explicit targets, including when switching is paused and its tap is stopped. Character matching follows the current keyboard layout, without a US physical-key assumption.
+
+The earlier failure was reported during right-click menu tracking. A hidden probe confirmed that the current French layout generates a comma and that an inactive native menu can match it. Thus normal character mapping was not the reproduced failure; an explicit menu-scoped routing path addresses the remaining delivery/tracking ambiguity. Actual right-click/physical-key acceptance is still a manual check.

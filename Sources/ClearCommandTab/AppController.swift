@@ -30,6 +30,8 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     private var statusItem: NSStatusItem?
     private var statusMenu: NSMenu?
     private var statusMenuIsOpen = false
+    private var pendingStatusMenuCommand: StatusMenuCommand?
+    private var statusMenuOwnedKeys: Set<UInt16> = []
     private var paused = false
     private var status = ""
     private var reportedStatus: String?
@@ -281,6 +283,32 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         statusItem?.button?.target = self
         statusItem?.button?.action = #selector(statusItemClicked)
         statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        if let command = pendingStatusMenuCommand {
+            pendingStatusMenuCommand = nil
+            // Settings may activate the app only after tracking has relinquished
+            // keyboard focus. The original shortcut is consumed, not reposted.
+            DispatchQueue.main.async { [weak self] in
+                switch command {
+                case .settings: self?.showSettings()
+                case .quit: NSApp.terminate(nil)
+                }
+            }
+        }
+    }
+
+    func menuHasKeyEquivalent(_ menu: NSMenu, for event: NSEvent,
+                             target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
+                             action: UnsafeMutablePointer<Selector?>) -> Bool {
+        // Keep the native path available even while switching is paused and its
+        // event tap is stopped. Resolve an explicit target rather than a responder.
+        guard let command = StatusMenuCommand.matching(menuIsOpen: menu === statusMenu && statusMenuIsOpen,
+                    characters: event.charactersIgnoringModifiers,
+                    modifiers: modifiers(CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue)))) else { return false }
+        switch command {
+        case .settings: target.pointee = self; action.pointee = #selector(showSettings)
+        case .quit: target.pointee = NSApp; action.pointee = #selector(NSApplication.terminate(_:))
+        }
+        return true
     }
 
     private func refreshWindows(completion: (() -> Void)? = nil) {
@@ -299,6 +327,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     func keyboardInputInterrupted() {
         cancelSelection()
         ownership.reset()
+        statusMenuOwnedKeys.removeAll()
     }
 
     private func modifiers(_ flags: CGEventFlags) -> ShortcutModifiers {
@@ -315,8 +344,29 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     }
 
     func handleKey(type: CGEventType, event: CGEvent) -> Bool {
-        if type == .keyUp { return ownership.consumeUp(UInt16(event.getIntegerValueField(.keyboardEventKeycode))) }
-        if statusMenuIsOpen { return false }
+        let key = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        if type == .keyUp {
+            let menuOwned = statusMenuOwnedKeys.remove(key) != nil
+            return ownership.consumeUp(key) || menuOwned
+        }
+        if type == .keyDown, statusMenuOwnedKeys.contains(key) { return true }
+        if statusMenuIsOpen {
+            guard type == .keyDown,
+                  let command = StatusMenuCommand.matching(menuIsOpen: true,
+                    characters: NSEvent(cgEvent: event)?.charactersIgnoringModifiers,
+                    modifiers: modifiers(event.flags)), let menu = statusMenu else { return false }
+            statusMenuOwnedKeys.insert(key)
+            if pendingStatusMenuCommand == nil {
+                pendingStatusMenuCommand = command
+                // Do not reenter AppKit menu tracking from the event-tap callback.
+                // Common modes also run while the native menu is tracking.
+                CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+                    menu.cancelTracking()
+                }
+                CFRunLoopWakeUp(CFRunLoopGetMain())
+            }
+            return true
+        }
         if type == .flagsChanged {
             if let mode = sessionMode, !mode.isHeld(by: modifiers(event.flags)) { finishSelection() }
             return false
@@ -333,7 +383,6 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             return false
         }
         guard type == .keyDown else { return false }
-        let key = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = modifiers(event.flags)
         if key == UInt16(kVK_Tab) {
             if let mode = sessionMode {

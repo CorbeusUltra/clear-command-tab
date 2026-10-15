@@ -22,7 +22,10 @@ let interactionChecks = PointerAndBadgeTests()
 let modeChecks = MultiModeTests()
 let focusChecks = FocusIntentTests()
 let presentationChecks = PresentationTests()
+let statusMenuChecks = StatusMenuTests()
 let cases: [(String, () -> Void)] = [
+    ("menu shortcuts never intercept another app's commands", statusMenuChecks.testShortcutsOnlyBelongToAnOpenMenu),
+    ("unrelated menu keys and modifier combinations pass through", statusMenuChecks.testUnrelatedMenuKeysPassThrough),
     ("quick MRU commit never reveals the panel", presentationChecks.testQuickMRUCommitNeverRevealsPanel),
     ("quick window commit never reveals the panel", presentationChecks.testQuickWindowCommitNeverRevealsPanel),
     ("all three held chords reveal at 150 ms", presentationChecks.testHeldChordsRevealAt150Milliseconds),
