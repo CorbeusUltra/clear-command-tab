@@ -21,6 +21,10 @@ let layoutChecks = SwitcherLayoutTests()
 let interactionChecks = PointerAndBadgeTests()
 let modeChecks = MultiModeTests()
 let cases: [(String, () -> Void)] = [
+    ("app groups follow app MRU and preserve window MRU", modeChecks.testGroupingByAppThenWindowRecency),
+    ("new windows join their group without changing selection", modeChecks.testNewWindowJoinsItsGroupWithoutMovingSelection),
+    ("reveal activates despite Cocoa's stale hidden cache", modeChecks.testRevealActivatesDespiteStaleHiddenFlag),
+    ("failed reveal/terminated/hidden ordinary targets do not activate", modeChecks.testFailedRevealAndTerminatedAppDoNotActivate),
     ("three shortcut modes and modifier priority", modeChecks.testShortcutDispatch),
     ("modifier release commits the opening mode", modeChecks.testModifierReleaseAndModeLock),
     ("hidden-app mode preserves recency", modeChecks.testHiddenAppsRemainInMRU),

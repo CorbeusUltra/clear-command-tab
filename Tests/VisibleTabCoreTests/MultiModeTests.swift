@@ -2,6 +2,63 @@ import Foundation
 import VisibleTabCore
 
 final class MultiModeTests {
+    func testGroupingByAppThenWindowRecency() {
+        let a1 = SwitcherTargetID.window(pid: 1, number: 10)
+        let a2 = SwitcherTargetID.window(pid: 1, number: 11)
+        let b1 = SwitcherTargetID.window(pid: 2, number: 20)
+        let b2 = SwitcherTargetID.window(pid: 2, number: 21)
+        var history = WindowHistory()
+        history.update(frontToBack: [a1, b1, a2, b2])
+        expectEqual(history.groupedOrder, [a1, a2, b1, b2])
+        history.activate(b2)
+        expectEqual(history.groupedOrder, [b2, b1, a1, a2])
+        expectEqual(history.groupedOrder(applicationOrder: [1, 2]), [a1, a2, b2, b1])
+        expectEqual(history.groupedOrder(applicationOrder: [99, 1, 1]), [a1, a2, b2, b1])
+        history.update(frontToBack: [a2, b1, b2])
+        expectEqual(history.groupedOrder(applicationOrder: [1, 2]), [a2, b2, b1])
+    }
+
+    func testNewWindowJoinsItsGroupWithoutMovingSelection() {
+        let a1 = SwitcherTargetID.window(pid: 1, number: 10)
+        let a2 = SwitcherTargetID.window(pid: 1, number: 11)
+        let b1 = SwitcherTargetID.window(pid: 2, number: 20)
+        var session = SelectionSession(ids: [a1, b1], currentID: a1)
+        session.reconcile(visibleIDs: [a1, a2, b1])
+        session.regroupWindows()
+        expectEqual(session.ids, [a1, a2, b1])
+        expectEqual(session.selectedID, b1)
+        session.advance(-1)
+        expectEqual(session.selectedID, a2)
+        session.reconcile(visibleIDs: [])
+        session.regroupWindows()
+        expectNil(session.selectedID)
+    }
+
+    func testRevealActivatesDespiteStaleHiddenFlag() {
+        let cachedHidden = true // Cocoa does not refresh this until the next run-loop turn.
+        var calls: [String] = []
+        let accepted = ApplicationSwitch.commit(revealHidden: true, isHidden: cachedHidden, isTerminated: false,
+                                                unhide: { calls.append("unhide"); return true },
+                                                activate: { calls.append("activate"); return true })
+        expectTrue(accepted)
+        expectEqual(calls, ["unhide", "activate"])
+        expectTrue(cachedHidden)
+    }
+
+    func testFailedRevealAndTerminatedAppDoNotActivate() {
+        var activations = 0
+        expectFalse(ApplicationSwitch.commit(revealHidden: true, isHidden: true, isTerminated: false,
+                                              unhide: { false }, activate: { activations += 1; return true }))
+        expectFalse(ApplicationSwitch.commit(revealHidden: true, isHidden: true, isTerminated: true,
+                                              unhide: { true }, activate: { activations += 1; return true }))
+        expectFalse(ApplicationSwitch.commit(revealHidden: false, isHidden: true, isTerminated: false,
+                                              unhide: { true }, activate: { activations += 1; return true }))
+        expectEqual(activations, 0)
+        expectTrue(ApplicationSwitch.commit(revealHidden: false, isHidden: false, isTerminated: false,
+                                             unhide: { false }, activate: { activations += 1; return true }))
+        expectEqual(activations, 1)
+    }
+
     func testShortcutDispatch() {
         expectEqual(SwitcherMode.starting(with: [.command]), .applications)
         expectEqual(SwitcherMode.starting(with: [.command, .shift]), .applications)

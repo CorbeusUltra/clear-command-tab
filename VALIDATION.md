@@ -2,6 +2,22 @@
 
 Target: Apple silicon Mac, macOS 27.0.1 (26A434), Apple Swift 6.4.
 
+## Version 0.4.1: responsiveness, grouped windows, and hidden-app focus
+
+- The user approved the 0.4.0 glass color. `GlassProfile.swift` and `SwitcherPanel.swift` are byte-for-byte unchanged. SHA-256: glass `fe7ce5c9f2193a9bfb14cec814aeb8c897bd8c8c6b5c8592c26a8bbe95833249`; panel `5e0c45dccee3b615e48cf2bc5587baedb5f5d5968bfd747e72b8b06b452c72eb`.
+- Removed the 150 ms overlay delay. Opening a mode now schedules rendering on the next main-queue turn using cached names, bundle identities, bitmaps, Dock PID, and display placement. No icon refresh or warm full-window scan is initiated by a shortcut.
+- Icon fetching/rasterization runs on a utility queue, with per-app coalescing, five-second activation throttling, and bounded launch retries. Activation notifications no longer re-enumerate all apps or reload icons synchronously. Icon completions update only the view, without triggering window discovery.
+- A headless benchmark of the old synchronous nine-app icon refresh measured 854.0 ms for the first pass, followed by 363.9, 362.2, 361.1 and 360.1 ms. A cached nine-app metadata pass averaged 0.00163 ms. The benchmark intentionally excludes overlay rendering and real app activation; it is not an end-to-end shortcut latency claim. Report: `.build/LatencyCheck-0.4.1/report.json`.
+- Existing permission/Secure Input checks measured approximately 0.41 ms per event and are retained. Idle sampling showed the main loop predominantly waiting; the identified issue is work performed during switching, not an idle CPU loop.
+- Window focus has an independent user-interactive queue, a shorter 30 ms AX timeout, a single eligibility/identity preflight, and cancellation on superseding requests, pause, or Space changes. It does not wait behind the 700 ms discovery budget. Partial snapshot processing no longer queries WindowServer on the UI thread. Cold selection never commits after the modifier has already been released.
+- Hidden-app reveal and activation share a testable commit sequence: Cocoa keeps `isHidden` cached until a later run-loop turn, so an accepted `unhide()` is followed by activation without re-reading that stale flag. The public app activation API is unchanged.
+- Window groups follow app MRU, with window MRU inside each group. Reconciliation keeps new windows adjacent to their app and preserves selection. Current application visibility immediately filters stale window snapshots.
+- Pre-update sources and installed 0.4.0 app backed up in `/Users/lucas/Documents/code/all/visible-tab-backups/20261014-200721-before-0.4.1/`.
+- The paused menu-bar button retains the usual arrow symbol and uses AppKit's disabled appearance to dim it; it remains clickable.
+- 26 core checks passed in debug and release. The signed 0.4.1 release (build 9) was installed at `/Users/lucas/Applications/VisibleTab.app`; strict signature verification passed. The old instance quit normally, the old installed bundle was moved to Trash, and the new instance remains closed pending the user's permission renewal. Its installed executable matches the release build. No Ready status or end-to-end latency result is claimed before that handoff. No real app/window activation or visual overlay was automated. The user handles renewed permission and the physical-keyboard acceptance checks.
+
+Manual acceptance: verify immediate opening and repeated cycling in all three modes, prompt focus at modifier release (especially hidden apps), app-group/window-MRU order, unchanged glass, Escape/keyboard recovery, and Space/multiple-monitor behavior. Headless timings cannot replace these checks.
+
 ## Version 0.4.0: three modes and reversible glass experiment
 
 - Pre-update sources and installed 0.3.4 bundle preserved in `/Users/lucas/Documents/code/all/visible-tab-backups/20261014-191554-before-0.4.0/` before editing. Current glass remains selectable without reinstalling.

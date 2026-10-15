@@ -51,6 +51,28 @@ public struct WindowHistory: Sendable {
     public private(set) var order: [SwitcherTargetID] = []
     public init() {}
 
+    /// Groups follow the recency of their latest-used window. Within each group, MRU
+    /// is preserved. The underlying history remains global so focus updates are cheap.
+    public var groupedOrder: [SwitcherTargetID] {
+        Self.group(order)
+    }
+
+    public func groupedOrder(applicationOrder: [Int32]) -> [SwitcherTargetID] {
+        Self.group(order, applicationOrder: applicationOrder)
+    }
+
+    public static func group(_ ids: [SwitcherTargetID], applicationOrder: [Int32] = []) -> [SwitcherTargetID] {
+        var pids: [Int32] = []
+        var windows: [Int32: [SwitcherTargetID]] = [:]
+        for id in ids {
+            if windows[id.pid] == nil { pids.append(id.pid) }
+            windows[id.pid, default: []].append(id)
+        }
+        var known: Set<Int32> = []
+        let orderedPIDs = (applicationOrder + pids).filter { windows[$0] != nil && known.insert($0).inserted }
+        return orderedPIDs.flatMap { windows[$0] ?? [] }
+    }
+
     public mutating func update(frontToBack ids: [SwitcherTargetID]) {
         let live = Set(ids)
         order.removeAll { !live.contains($0) }
@@ -62,5 +84,29 @@ public struct WindowHistory: Sendable {
         guard let id, order.contains(id) else { return }
         order.removeAll { $0 == id }
         order.insert(id, at: 0)
+    }
+}
+
+extension SelectionSession where ID == SwitcherTargetID {
+    public mutating func regroupWindows() {
+        let selected = selectedID
+        let grouped = WindowHistory.group(ids)
+        guard grouped != ids else { return }
+        self = Self(ids: grouped, currentID: nil)
+        if let selected { select(selected) }
+    }
+}
+
+public enum ApplicationSwitch {
+    /// Cocoa's isHidden remains cached for the current run-loop turn after unhide.
+    /// Treat an accepted unhide as permission to activate; never re-read that stale bit.
+    @discardableResult
+    public static func commit(revealHidden: Bool, isHidden: Bool, isTerminated: Bool,
+                              unhide: () -> Bool, activate: () -> Bool) -> Bool {
+        guard !isTerminated else { return false }
+        if isHidden {
+            guard revealHidden, unhide() else { return false }
+        }
+        return activate()
     }
 }

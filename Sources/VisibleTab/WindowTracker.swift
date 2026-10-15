@@ -3,7 +3,7 @@ import ApplicationServices
 import Darwin
 import VisibleTabCore
 
-private struct WindowApplication: Sendable {
+struct WindowApplication: Sendable {
     let pid: Int32
     let hidden: Bool
 }
@@ -19,6 +19,8 @@ private struct WindowSnapshot: Sendable {
     var windows: [TrackedWindow] = []
     var focused: SwitcherTargetID?
     var complete = true
+    var foregroundBounds: CGRect?
+    var eligibleIDs: Set<SwitcherTargetID> = []
 }
 
 /// This optional bridge supplies identity only. Discovery and actions use public AX APIs.
@@ -87,6 +89,11 @@ private final class AXWindowScanner: @unchecked Sendable {
             return (.window(pid: pid, number: number), index)
         }, uniquingKeysWith: { first, _ in first })
         var result = WindowSnapshot()
+        let visiblePIDs = Set(inputs.filter { !$0.hidden }.map(\.pid))
+        result.eligibleIDs = surfaceIDs.filter { visiblePIDs.contains($0.pid) }
+        if let bounds = surfaces.first(where: { $0[kCGWindowOwnerPID as String] as? Int32 == frontmost })?[kCGWindowBounds as String] as? NSDictionary {
+            result.foregroundBounds = CGRect(dictionaryRepresentation: bounds)
+        }
         // Foreground first, then WindowServer order, so a slow app cannot delay that target.
         let orderedInputs = inputs.sorted { lhs, rhs in
             if (lhs.pid == frontmost) != (rhs.pid == frontmost) { return lhs.pid == frontmost }
@@ -133,32 +140,6 @@ private final class AXWindowScanner: @unchecked Sendable {
         return result
     }
 
-    func validated(_ record: TrackedWindow) -> AXUIElement? {
-        guard case .window(let pid, let number) = record.id,
-              let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated, !app.isHidden,
-              Self.onscreenWindows().contains(where: {
-                  $0[kCGWindowOwnerPID as String] as? Int32 == pid &&
-                  $0[kCGWindowNumber as String] as? UInt32 == number
-              }), WindowIdentity.number(record.element) == number,
-              Self.value(record.element, kAXRoleAttribute) as String? == kAXWindowRole,
-              Self.value(record.element, kAXMinimizedAttribute) as Bool? != true else { return nil }
-        return record.element
-    }
-
-    func prepareFocus(_ record: TrackedWindow) -> Bool {
-        guard let element = validated(record) else { return false }
-        let app = applications[record.id.pid] ?? AXUIElementCreateApplication(record.id.pid)
-        AXUIElementSetMessagingTimeout(app, 0.06)
-        _ = AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
-        _ = AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute as CFString, element)
-        return true
-    }
-
-    func raise(_ record: TrackedWindow) -> Bool {
-        guard let element = validated(record) else { return false }
-        return AXUIElementPerformAction(element, kAXRaiseAction as CFString) == .success
-    }
-
     func stop() {
         for pid in Array(observers.keys) { removeObserver(pid) }
         applications.removeAll()
@@ -197,14 +178,48 @@ private final class AXWindowScanner: @unchecked Sendable {
     }
 }
 
+/// Cancellation is shared with the focus queue; no mutable scanner state crosses queues.
+private final class FocusCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelled
+    }
+    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+}
+
+private enum AXWindowActions {
+    static func prepare(_ record: TrackedWindow, cancellation: FocusCancellation) -> Bool {
+        guard !cancellation.isCancelled, case .window(let pid, let number) = record.id,
+              AXWindowScanner.onscreenWindows().contains(where: {
+                  $0[kCGWindowOwnerPID as String] as? Int32 == pid &&
+                  $0[kCGWindowNumber as String] as? UInt32 == number
+              }) else { return false }
+        // Focus has its own short timeout and never waits for the discovery queue.
+        AXUIElementSetMessagingTimeout(record.element, 0.03)
+        guard !cancellation.isCancelled, WindowIdentity.number(record.element) == number,
+              AXWindowScanner.value(record.element, kAXMinimizedAttribute) as Bool? != true else { return false }
+        _ = AXUIElementSetAttributeValue(record.element, kAXMainAttribute as CFString, kCFBooleanTrue)
+        guard !cancellation.isCancelled else { return false }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.03)
+        _ = AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute as CFString, record.element)
+        return !cancellation.isCancelled
+    }
+}
+
 @MainActor
 final class WindowTracker {
     nonisolated static var identityAvailable: Bool { WindowIdentity.function != nil }
     private(set) var records: [SwitcherTargetID: TrackedWindow] = [:]
     private(set) var history = WindowHistory()
     private(set) var focusedID: SwitcherTargetID?
+    private(set) var foregroundBounds: CGRect?
     var onChange: (() -> Void)?
-    private let queue = DispatchQueue(label: "local.lucas.VisibleTab.windows", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "local.lucas.VisibleTab.windows", qos: .utility)
+    private let focusQueue = DispatchQueue(label: "local.lucas.VisibleTab.windowFocus", qos: .userInteractive)
+    private var focusCancellation: FocusCancellation?
     private lazy var scanner = AXWindowScanner(onEvent: { [weak self] in
         DispatchQueue.main.async { self?.scheduleRefresh() }
     })
@@ -218,10 +233,12 @@ final class WindowTracker {
     private var completions: [() -> Void] = []
 
     func invalidateSnapshot() {
+        focusCancellation?.cancel()
         generation += 1
         records.removeAll()
         history = WindowHistory()
         focusedID = nil
+        foregroundBounds = nil
     }
 
     func setEnabled(_ value: Bool) {
@@ -229,6 +246,7 @@ final class WindowTracker {
         enabled = value && Self.identityAvailable
         generation += 1
         if !enabled {
+            focusCancellation?.cancel()
             refreshWork?.cancel()
             refreshWork = nil
             completions.removeAll()
@@ -240,8 +258,8 @@ final class WindowTracker {
         }
     }
 
-    func refresh(applications: [NSRunningApplication], frontmost: Int32?, completion: (() -> Void)? = nil) {
-        self.inputs = applications.map { .init(pid: $0.processIdentifier, hidden: $0.isHidden) }
+    func refresh(applications: [WindowApplication], frontmost: Int32?, completion: (() -> Void)? = nil) {
+        self.inputs = applications
         self.frontmost = frontmost
         guard enabled else { completion?(); return }
         if let completion { completions.append(completion) }
@@ -279,18 +297,13 @@ final class WindowTracker {
                     let fresh = Dictionary(snapshot.windows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                     if snapshot.complete { self.records = fresh }
                     else {
-                        let eligible = Set(AXWindowScanner.onscreenWindows().compactMap { surface -> SwitcherTargetID? in
-                            guard let pid = surface[kCGWindowOwnerPID as String] as? Int32,
-                                  let number = surface[kCGWindowNumber as String] as? UInt32,
-                                  inputs.contains(where: { $0.pid == pid && !$0.hidden }) else { return nil }
-                            return .window(pid: pid, number: number)
-                        })
-                        self.records = self.records.filter { eligible.contains($0.key) }
+                        self.records = self.records.filter { snapshot.eligibleIDs.contains($0.key) }
                         self.records.merge(fresh, uniquingKeysWith: { _, new in new })
                     }
                     let oldOrder = self.history.order.filter { self.records[$0] != nil }
                     self.history.update(frontToBack: snapshot.windows.map(\.id) + oldOrder)
                     self.focusedID = snapshot.focused
+                    self.foregroundBounds = snapshot.foregroundBounds
                     self.history.activate(snapshot.focused)
                     self.onChange?()
                     callbacks.forEach { $0() }
@@ -303,18 +316,30 @@ final class WindowTracker {
         }
     }
 
-    func focus(_ id: SwitcherTargetID, completion: @escaping (Bool) -> Void) {
-        guard enabled, let record = records[id] else { completion(false); return }
-        let scanner = self.scanner, generation = self.generation
-        queue.async { [weak self] in
-            let prepared = scanner.prepareFocus(record)
+    func focus(_ id: SwitcherTargetID, app: NSRunningApplication, completion: @escaping (Bool) -> Void) {
+        guard enabled, let record = records[id], !app.isTerminated, !app.isHidden else { completion(false); return }
+        focusCancellation?.cancel()
+        let cancellation = FocusCancellation()
+        focusCancellation = cancellation
+        let generation = self.generation
+        focusQueue.async { [weak self] in
+            let prepared = AXWindowActions.prepare(record, cancellation: cancellation)
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.enabled, generation == self.generation, prepared,
-                      let app = NSRunningApplication(processIdentifier: id.pid), !app.isHidden, !app.isTerminated,
+                      !cancellation.isCancelled, !app.isTerminated,
                       app.activate(options: []) else { completion(false); return }
-                self.queue.async {
-                    let raised = scanner.raise(record)
-                    DispatchQueue.main.async { completion(raised) }
+                self.focusQueue.async { [weak self] in
+                    let raised = !cancellation.isCancelled &&
+                        AXUIElementPerformAction(record.element, kAXRaiseAction as CFString) == .success
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, generation == self.generation, !cancellation.isCancelled else { return }
+                        if raised {
+                            self.history.activate(id)
+                            self.focusedID = id
+                            self.onChange?()
+                        }
+                        completion(raised)
+                    }
                 }
             }
         }
