@@ -2,13 +2,33 @@
 
 Target: Apple silicon Mac, macOS 27.0.1 (26A434), Apple Swift 6.4.
 
+## Version 0.4.0: three modes and reversible glass experiment
+
+- Pre-update sources and installed 0.3.4 bundle preserved in `/Users/lucas/Documents/code/all/visible-tab-backups/20261014-191554-before-0.4.0/` before editing. Current glass remains selectable without reinstalling.
+- Added distinct application/window target identities, explicit shortcut dispatch and modifier ownership, a hidden-app MRU view, and window MRU. Original Command-Tab filtering is unchanged. Hidden-mode commit unhides only the chosen app; cancel does not unhide apps. Window mode excludes minimized windows and hidden apps, and matches on-screen windows using an optional runtime identity bridge.
+- Window discovery and Accessibility subscription/focus work run on a serial queue. Per-element messaging timeouts are 60 ms; discovery has a 700 ms soft budget, with an already-started IPC call permitted to finish. Cold selection is canceled after 900 ms. There is no idle window polling. Space transitions invalidate outstanding snapshots and selections.
+- Left-click toggles all modes; right-click/Control-click opens Settings/Quit. Window tiles include titles, separate from ordinary app-mode captions. Existing pointer gating, badges, responsive layout, Secure Input fallback, key/nonactivating focus handling, and ordinary-mode H/Q are retained.
+- Glass choice Current/AltTab constructs either the previous public-clear material or clear with guarded internal variant 3. The setter's signature is `v24@0:8q16` on this Mac. Runtime identity bridge and guarded glass profile availability both checked true without opening an overlay.
+- 22 core checks passed in debug and release, with zero failed assertions. Coverage includes existing filtering/history/layout/pointer/badge behavior, three-mode routing, modifier-release priority, hidden MRU, distinct windows of one app, window recency and reconciliation, empty/single lists, and per-window title geometry.
+- Read-only diagnostics successfully rasterized icons for all 9 regular apps in the live snapshot. No regular Python GUI app was present; the Matplotlib source/cache diagnosis and comparison against native Command-Tab remain pending. Refresh and rasterization improvements are implemented but the specific reported Python issue is not claimed fixed.
+- No overlay, real window focus action, permission-setting edit, or physical-keyboard integration test was performed for this version. The 0.4.0 release bundle (build 8) was built and installed at `/Users/lucas/Applications/VisibleTab.app`; strict signature verification passed. The old installed bundle was moved to Trash by the installer, in addition to the dated backup. The old instance quit via a normal NSRunningApplication termination request. The new app was left closed for the user to open and renew permission; no Ready status is claimed. User handoff for renewed Accessibility permission is required before live tests.
+
+### Required manual acceptance after permission renewal
+
+1. Left-click pause/resume; right-click Settings/Quit. Native Command-Tab must return while paused.
+2. Visible app switching unchanged, including minimized/windowless apps; Shift, arrows, pointer movement, Escape and immediate keyboard recovery.
+3. Hide two apps, cycle Command-Option-Tab, cancel and verify neither was revealed. Commit one, including releasing Option before Command, and verify only that app becomes visible.
+4. Open multiple windows of one app and another app. Verify window titles, previous-window switching, Shift, modifier release, covered-window inclusion, minimized/hidden/other-Space exclusions, closure during selection, Space changes and multiple monitors.
+5. Compare Current and AltTab glass on white and dark backdrops, checking selection contrast, refraction and artefacts. Switch to Current immediately if the experiment is unsuitable.
+6. Reproduce the original Matplotlib window from VS Code, compare its icon with native Command-Tab, and collect icon diagnostics if it still differs.
+
 ## Version 0.3.4: selection contrast on bright backdrops
 
 - The user reported that selection becomes indistinguishable on a white backdrop. The previous custom indicator drew `labelColor` at 16% opacity; in dark appearance this is white, so it provides no contrast over white content beneath clear glass.
 - Replaced that custom fill with a single AppKit `NSVisualEffectView` using `.selection`, `.withinWindow`, `.active`, and `isEmphasized = false`. It sits behind the icon cells, follows the selected tile, uses the same rounded geometry, and scrolls with the row. Icon artwork and badges are not made vibrant. Public clear glass and key-window handling are unchanged.
 - Release bundle build and strict signature verification passed. No core-model behavior changed.
 - A comparison harness was prepared for white and black backdrops. Computer Use repeatedly failed with `cgWindowNotFound`, including when targeting the installed app; a native window diagnostic confirmed the temporary window was onscreen. No successful screenshot was obtained, so visual contrast improvement is **not yet verified**.
-- Installation and the user's live white-background confirmation are pending. The existing installed 0.3.3 remains in place until it is quit for replacement.
+- At this initial checkpoint, installation and the user's live white-background confirmation were pending. Before the 0.4.0 update, the installed bundle was verified as 0.3.4 and backed up; no additional live contrast result is recorded here.
 
 ## Version 0.3.3: active public clear glass and larger badges
 

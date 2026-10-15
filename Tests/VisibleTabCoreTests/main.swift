@@ -19,7 +19,14 @@ func expectTrue(_ value: Bool, file: StaticString = #filePath, line: UInt = #lin
 let checks = SwitcherModelTests()
 let layoutChecks = SwitcherLayoutTests()
 let interactionChecks = PointerAndBadgeTests()
+let modeChecks = MultiModeTests()
 let cases: [(String, () -> Void)] = [
+    ("three shortcut modes and modifier priority", modeChecks.testShortcutDispatch),
+    ("modifier release commits the opening mode", modeChecks.testModifierReleaseAndModeLock),
+    ("hidden-app mode preserves recency", modeChecks.testHiddenAppsRemainInMRU),
+    ("window identities and independent MRU", modeChecks.testIndependentWindowIdentityAndRecency),
+    ("window closure and empty/single sessions", modeChecks.testWindowSessionReconciliation),
+    ("titles fit count-adaptive window rows", modeChecks.testWindowTitleLayout),
     ("strict hidden filter and exclusions", checks.testStrictHiddenFilterAndExclusions),
     ("initial and remembered order", checks.testInitialOrderAndRememberedOrder),
     ("hide/unhide preserves history; termination removes app", checks.testHiddenHistorySurvivesUnhideAndTermination),

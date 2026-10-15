@@ -8,6 +8,8 @@ public struct SwitcherLayout: Sendable {
     public let spacing: CGFloat
     public let horizontalInset: CGFloat
     public let rowBottom: CGFloat
+    public let titleBandHeight: CGFloat
+    public var rowHeight: CGFloat { tileSize + titleBandHeight }
     public let labelHeight: CGFloat
     public let labelFontSize: CGFloat
     public let labelBottom: CGFloat
@@ -16,7 +18,7 @@ public struct SwitcherLayout: Sendable {
     public var viewportWidth: CGFloat { max(1, size.width - horizontalInset * 2) }
     public var needsScrolling: Bool { documentWidth > viewportWidth + 0.5 }
 
-    public init?(applicationCount: Int, availableSize: CGSize) {
+    public init?(applicationCount: Int, availableSize: CGSize, showsTitles: Bool = false) {
         guard applicationCount > 0, availableSize.width > 0, availableSize.height > 0 else { return nil }
         let count = CGFloat(applicationCount)
         let maxWidth = availableSize.width * 0.9
@@ -31,15 +33,16 @@ public struct SwitcherLayout: Sendable {
         labelFontSize = max(11, 13 * scale)
         labelHeight = ceil(labelFontSize * 1.5)
         labelBottom = max(6, 10 * scale)
-        rowBottom = labelBottom + labelHeight + 4 * scale
+        titleBandHeight = showsTitles ? labelHeight * 2 + 4 * scale : 0
+        rowBottom = showsTitles ? labelBottom : labelBottom + labelHeight + 4 * scale
         documentWidth = count * tileSize + max(0, count - 1) * spacing
         size = CGSize(width: min(maxWidth, documentWidth + 2 * horizontalInset),
-                      height: rowBottom + tileSize + 32 * scale)
+                      height: rowBottom + tileSize + titleBandHeight + 32 * scale)
         cornerRadius = min(64 * scale, size.height * 0.31)
     }
 
     public func tileFrame(at index: Int) -> CGRect {
-        CGRect(x: CGFloat(index) * (tileSize + spacing), y: 0, width: tileSize, height: tileSize)
+        CGRect(x: CGFloat(index) * (tileSize + spacing), y: 0, width: tileSize, height: rowHeight)
     }
 
     public func labelFrame(at index: Int, scrollOrigin: CGFloat, textWidth: CGFloat) -> CGRect {

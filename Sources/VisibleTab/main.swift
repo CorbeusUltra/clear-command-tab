@@ -1,15 +1,25 @@
 import AppKit
+import CryptoKit
 
 if CommandLine.arguments.contains("--diagnostics") {
     let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && !$0.isTerminated }
     let dockPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
     let report: [String: Any] = [
         "accessibilityTrusted": AXIsProcessTrusted(),
+        "windowIdentityAvailable": WindowTracker.identityAvailable,
+        "altTabGlassAvailable": GlassProfile.altTabAvailable,
+        "glassProfile": GlassProfile.selected.rawValue,
         "frontmostPID": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
         "dockBadges": dockPID.map { DockBadgeReader().snapshot(dockPID: $0) } ?? [:],
         "applications": apps.map {
-            ["pid": $0.processIdentifier, "name": $0.localizedName ?? "Application",
-             "bundleIdentifier": $0.bundleIdentifier ?? "", "hidden": $0.isHidden] as [String: Any]
+            let icon = ApplicationIcon.resolve($0, pixels: 320)
+            let digest = icon?.dataProvider?.data.map {
+                SHA256.hash(data: $0 as Data).map { String(format: "%02x", $0) }.joined()
+            } ?? ""
+            return ["pid": $0.processIdentifier, "name": $0.localizedName ?? "Application",
+             "bundleIdentifier": $0.bundleIdentifier ?? "", "hidden": $0.isHidden,
+             "bundlePath": $0.bundleURL?.path ?? "", "executablePath": $0.executableURL?.path ?? "",
+             "iconPixels": icon?.width ?? 0, "iconDigest": digest] as [String: Any]
         },
     ]
     if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {

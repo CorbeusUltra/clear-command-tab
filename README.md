@@ -1,6 +1,6 @@
 # VisibleTab
 
-A small native macOS application switcher that excludes **only apps hidden with Hide / Command-H**. One icon represents one app. Minimized windows, windowless apps, Finder, and apps on other Spaces remain in the list.
+A small native macOS switcher with three modes. **Command-Tab** excludes only applications hidden with Hide / Command-H, preserving minimized, windowless, and other-Space apps. **Command-Option-Tab** reveals a selected hidden app. **Option-Tab** switches between non-minimized windows of visible apps on the current Space, with an icon and title for each window.
 
 ## Build and install
 
@@ -30,21 +30,27 @@ On macOS 27, the permission page is named **Device Control and Data Access** und
 
 | Input | Action |
 | --- | --- |
+| Left-click the menu bar icon | Pause / resume all three modes |
+| Right-click or Control-click the menu bar icon | Open the menu with Settings and Quit |
 | Quick Command-Tab | Switch to the previously active visible app |
+| Command-Option-Tab | Cycle hidden apps; release Command to reveal the selection |
+| Option-Tab | Cycle current-Space windows by last use; release Option to focus the selection |
 | Hold Command, then Tab | Display the switcher after 150 ms and move forward |
 | Shift-Tab | Move backward |
 | Left / Right arrow | Move backward / forward |
 | Release Command | Activate the selected app |
 | Escape | Cancel |
-| H | Hide the selected app and remove it from the list |
-| Q | Request a normal quit; never force quit |
+| H in Command-Tab | Hide the selected app and remove it from the list |
+| Q in Command-Tab | Request a normal quit; never force quit |
 | Move the pointer over / click an icon | Select / activate that app |
 
-Selection wraps at both ends. H and Q use the current keyboard layout. Unknown shortcuts and Option/Control chords cancel the switcher and are passed to the foreground app. Hidden apps remain accessible through the Dock or Spotlight.
+Selection wraps at both ends and remains in the mode selected by the opening chord. Releasing Option before Command in the hidden-app mode does not change its mode or reveal anything early. Escape leaves all hidden apps hidden. Unknown shortcuts, Control chords, and modifiers belonging to another mode cancel selection and pass through. H and Q retain their original behavior in the ordinary Command-Tab mode.
+
+Window mode includes covered windows on the current Space across connected screens. It excludes hidden apps, minimized windows, windowless placeholders, inactive tabs, and utility panels. App and window MRU are separate. A first run uses front-to-back window order until focus changes are observed. Window discovery runs asynchronously; cold discovery is abandoned after 900 ms instead of activating a target long after a shortcut. Unsupported or unresponsive Accessibility windows may be omitted. Focusing uses public Accessibility main/focused-window attributes and Raise, plus normal app activation; some apps can manage their own focus differently.
 
 A stationary pointer does not select an icon when the panel opens beneath it. Pointer selection starts after actual movement of at least one logical point; clicks remain immediate.
 
-The menu provides **Pause / Resume**, **Settings…**, and **Quit VisibleTab**. Pause or Quit returns Command-Tab to macOS. **Show menu bar icon** can be disabled; reopen VisibleTab from Applications or Spotlight to reach the settings again. Reopening does not start another instance.
+The right-click menu provides **Pause / Resume**, **Settings…**, and **Quit VisibleTab**. A left click toggles Pause / Resume. Pause or Quit returns keyboard shortcuts to macOS and the foreground app; the menu stays accessible while paused. Pause remains temporary, as in earlier versions. **Show menu bar icon** can be disabled; reopen VisibleTab from Applications or Spotlight to reach the settings again. Reopening does not start another instance.
 
 **Launch at login** is off initially. It uses macOS Service Management and can require approval in **System Settings → General → Login Items & Extensions**.
 
@@ -53,18 +59,20 @@ AltTab's existing preferences are preserved, including its own launch-at-login s
 ## Design and limits
 
 - Swift and AppKit, with a testable model separate from the UI and keyboard integration.
-- Application state follows NSWorkspace notifications. No idle polling, previews, or window enumeration loop. A 100 ms watchdog exists only during a held selection to dismiss a stale panel if Secure Input prevents the modifier release from reaching the event tap.
+- Application state follows NSWorkspace notifications. Window state follows Accessibility notifications and Space changes, with coalesced reads on a serial queue, per-element timeouts, and a bounded discovery pass. No periodic window polling or screenshots are used. A 100 ms watchdog exists only during a held selection to dismiss a stale panel if Secure Input prevents the modifier release from reaching the event tap.
 - MRU order is observed by VisibleTab and remembered by app identity between launches. It cannot read Apple's private switching history. The first launch places the foreground app first, followed by alphabetical app names.
 - The panel is nonactivating, so the foreground application remains unchanged while selecting. It temporarily becomes the key window to keep native clear glass in its active appearance; dismissal releases that keyboard focus before activating the selected app. Selecting an app activates all its windows, without reopening documents or restoring minimized windows.
 - Secure Input can temporarily restore the native switcher. Missing Accessibility permission or an event-tap failure also leaves the native switcher available.
-- On macOS 26 and later, the panel uses the public native Liquid Glass `NSGlassEffectView` with `.clear` style and no custom tint, forced interaction state, or private rendering methods. This style was chosen by the user after a side-by-side comparison with `.regular` on a contrasting backdrop. The scroll and clip views have transparent backgrounds. VisibleTab does not change system appearance settings. macOS 14–15 retains the older material.
+- On macOS 26 and later, **Settings → Glass → Current** uses the previous public `NSGlassEffectView` `.clear` style. **AltTab**, the initial profile for this update, applies the optional internal `set_variant:` value 3 to that same clear material, inspired by [AltTab's material implementation](https://github.com/lwouis/alt-tab-macos/blob/master/src/switcher/main-window/TilesPanelBackgroundView.swift). The method and its signature are checked before use; unavailable profiles fall back to Current. Switching back to Current constructs a fresh public view, without guessing a private reset value. Content, key-window handling, badges, and selection material are shared. An exact native visual match is not claimed. macOS 14–15 retains the older material; system appearance settings are never changed.
+- The optional `_AXUIElementGetWindow` bridge identifies windows so they can be matched to the public on-screen WindowServer list. It is resolved at runtime and used only for identity, with no injection or system changes. If unavailable, Option-Tab is disabled with an explanation; both app modes remain functional.
+- Application icons are rasterized from the actual running app's icon. They refresh on activation, panel opening, and four bounded retries after discovery to avoid keeping an early placeholder indefinitely. Icon resolution runs outside the global keyboard callback. The original optical margins are retained. Matplotlib's reported white-icon issue still needs a reproduction from VS Code to establish whether the source icon itself is wrong or the previous cache/rendering was responsible.
 - App badges come from the Dock's accessibility status labels and match apps by bundle identity. They refresh asynchronously once per second only while switching, using the existing Accessibility permission. Apps without an exposed Dock badge have no badge; notification contents are never read.
 - The panel is a native approximation, not Apple's private UI. Its width follows the app count, with full-size icons when there is room. Dense rows proportionally reduce icons, gaps, margins, and panel height. Horizontal scrolling is used only after reaching the minimum readable icon size. The selected app's name follows its icon and stays within the panel.
 - Selection uses AppKit's neutral selection material within the window, behind the app icon, instead of a theme-dependent white/black translucent fill. The native clear glass remains the outer surface.
 - Resizing is animated only for an already visible panel and respects Reduce Motion. The glass material follows the system appearance and accessibility rendering.
 - Space changes, session changes, sleep, clicks outside the panel, and unrelated app activations cancel a pending selection.
 
-Settings and a bounded app-order history are stored in the `local.lucas.VisibleTab` UserDefaults domain. No keystroke history is stored.
+The glass profile, settings, and a bounded app-order history are stored in the `local.lucas.VisibleTab` UserDefaults domain. No keystroke history is stored.
 
 ## Development checks
 
@@ -75,7 +83,7 @@ zsh scripts/build-app.sh
 open .build/VisibleTab.app --args --preview
 ```
 
-`--diagnostics` prints a local JSON snapshot of running applications, Dock badges, and Accessibility trust, then exits. `--preview` displays the panel without intercepting shortcuts or activating apps and **automatically quits after six seconds**. `--preview-count=3`, `--preview-light`, and `--preview-dark` provide visual QA cases; `--preview-duration=N` sets a lifetime between 2 and 30 seconds. Neither mode is required for everyday use.
+`--diagnostics` prints a local JSON snapshot of running applications, executable/bundle paths, raster-icon sizes and hashes, Dock badges, optional bridge availability, and Accessibility trust, then exits. Icon hashes describe app artwork only; no screenshots or window content are read. `--preview` displays the panel without intercepting shortcuts or activating apps and **automatically quits after six seconds**. `--preview-count=3`, `--preview-light`, and `--preview-dark` provide visual QA cases; `--preview-duration=N` sets a lifetime between 2 and 30 seconds. Neither mode is required for everyday use.
 
 Accessibility trust depends on the launch context: a diagnostic executable started in a trusted terminal can report `true` while the app launched from Applications still lacks permission. Use the installed app's **Ready** status to verify that its actual event tap is enabled.
 
@@ -86,3 +94,13 @@ Native effect reference: [Apple's NSGlassEffectView documentation](https://devel
 See [VALIDATION.md](VALIDATION.md) for checks performed on the target Mac and remaining manual scenarios.
 
 `swift run VisibleTabChecks` uses an executable test runner because this Mac's Command Line Tools do not contain XCTest. To build two disposable document-free apps for integration tests, run `zsh scripts/build-fixtures.sh`; the bundles are created under `.build/Fixtures/`.
+
+## Version 0.4.0 rollback and validation handoff
+
+The pre-update sources and installed app are preserved at:
+
+`/Users/lucas/Documents/code/all/visible-tab-backups/20261014-191554-before-0.4.0/`
+
+For a visual rollback, choose **Settings → Glass → Current**; no rebuild or permission renewal is needed. For a full rollback, quit VisibleTab, move the installed bundle to Trash with `/usr/bin/trash -s /Users/lucas/Applications/VisibleTab.app`, then copy the backed-up `VisibleTab.app` to `/Users/lucas/Applications/`. `source/` preserves the complete source before this update.
+
+After installing a rebuild, the user renews Accessibility permission themselves and clicks **Check permission**. The implementation workflow stops at this handoff; it does not automate System Settings or authentication. Physical shortcut tests and Current/AltTab visual comparison happen afterward.

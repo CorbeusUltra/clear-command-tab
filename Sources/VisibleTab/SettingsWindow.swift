@@ -6,13 +6,15 @@ final class SettingsWindow: NSWindowController {
     var onShowIcon: ((Bool) -> Void)?
     var onTogglePause: (() -> Void)?
     var onCheckPermission: (() -> Void)?
+    var onGlassProfile: ((GlassProfile) -> Void)?
+    private let glassChoice = NSPopUpButton()
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let showIcon = NSButton(checkboxWithTitle: "Show menu bar icon", target: nil, action: nil)
     private let launchAtLogin = NSButton(checkboxWithTitle: "Launch at login", target: nil, action: nil)
     private let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 405),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 580),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "VisibleTab Settings"
         window.isReleasedWhenClosed = false
@@ -30,11 +32,11 @@ final class SettingsWindow: NSWindowController {
                 stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
             ])
         }
-        let title = NSTextField(labelWithString: "Command-Tab, without hidden apps")
+        let title = NSTextField(labelWithString: "VisibleTab")
         title.font = .systemFont(ofSize: 17, weight: .semibold)
         stack.addArrangedSubview(title)
         let description = NSTextField(wrappingLabelWithString:
-            "Apps hidden with Command-H are excluded. Minimized apps, apps without windows, and apps on other Spaces remain available.")
+            "⌘Tab: visible apps. ⌘⌥Tab: hidden apps. ⌥Tab: windows on the current Space, excluding minimized windows. Hold Shift to cycle backward.")
         description.font = .systemFont(ofSize: 12)
         description.textColor = .secondaryLabelColor
         stack.addArrangedSubview(description)
@@ -55,6 +57,20 @@ final class SettingsWindow: NSWindowController {
         iconHelp.font = .systemFont(ofSize: 11)
         iconHelp.textColor = .secondaryLabelColor
         stack.addArrangedSubview(iconHelp)
+        let glassRow = NSStackView()
+        glassRow.spacing = 8
+        glassRow.addArrangedSubview(NSTextField(labelWithString: "Glass:"))
+        glassChoice.addItems(withTitles: ["Current", "AltTab"])
+        glassChoice.target = self
+        glassChoice.action = #selector(glassChanged)
+        glassRow.addArrangedSubview(glassChoice)
+        stack.addArrangedSubview(glassRow)
+        let glassHelp = NSTextField(wrappingLabelWithString: GlassProfile.altTabAvailable
+            ? "Current restores the previous public clear material. AltTab tries a stronger native clear-glass profile."
+            : "The AltTab glass profile is unavailable on this macOS. Both choices use the current material.")
+        glassHelp.font = .systemFont(ofSize: 11)
+        glassHelp.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(glassHelp)
         launchAtLogin.target = self
         launchAtLogin.action = #selector(loginChanged)
         stack.addArrangedSubview(launchAtLogin)
@@ -65,19 +81,25 @@ final class SettingsWindow: NSWindowController {
         controls.addArrangedSubview(pauseButton)
         controls.addArrangedSubview(NSButton(title: "Quit", target: NSApp, action: #selector(NSApplication.terminate(_:))))
         stack.addArrangedSubview(controls)
+        for label in [description, statusLabel, iconHelp, glassHelp] {
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
         window.center()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    func update(status: String, paused: Bool, iconVisible: Bool) {
+    func update(status: String, paused: Bool, iconVisible: Bool, glassProfile: GlassProfile) {
         statusLabel.stringValue = status
+        glassChoice.selectItem(at: glassProfile == .current ? 0 : 1)
         pauseButton.title = paused ? "Resume" : "Pause"
         showIcon.state = iconVisible ? .on : .off
         let loginStatus = SMAppService.mainApp.status
         launchAtLogin.state = (loginStatus == .enabled || loginStatus == .requiresApproval) ? .on : .off
     }
 
+    @objc private func glassChanged() { onGlassProfile?(glassChoice.indexOfSelectedItem == 0 ? .current : .altTab) }
     @objc private func iconChanged() { onShowIcon?(showIcon.state == .on) }
     @objc private func togglePause() { onTogglePause?() }
     @objc private func checkPermission() { onCheckPermission?() }

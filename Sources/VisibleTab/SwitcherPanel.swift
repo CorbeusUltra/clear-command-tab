@@ -3,23 +3,25 @@ import VisibleTabCore
 
 @MainActor
 struct SwitcherItem {
-    let id: Int32
+    let id: SwitcherTargetID
     let name: String
-    let icon: NSImage?
+    let icon: CGImage?
     var badge: String? = nil
+    var windowTitle: String? = nil
 }
 
 @MainActor
 final class SwitcherPanel: NSPanel {
-    var onSelect: ((Int32, Bool) -> Void)?
-    private let surface: NSView
+    var onSelect: ((SwitcherTargetID, Bool) -> Void)?
+    private var surface: NSView
+    private var glassProfile = GlassProfile.selected
     private let canvas = NSView()
     private let scroll = NSScrollView()
     private let row = NSView()
     private let selectionHighlight = NSVisualEffectView()
     private let nameLabel = NSTextField(labelWithString: "")
-    private var cells: [Int32: ApplicationCell] = [:]
-    private var displayedIDs: [Int32] = []
+    private var cells: [SwitcherTargetID: ApplicationCell] = [:]
+    private var displayedIDs: [SwitcherTargetID] = []
     private var layout: SwitcherLayout?
     private var selectedIndex: Int?
     private var scrollObserver: NSObjectProtocol?
@@ -32,20 +34,7 @@ final class SwitcherPanel: NSPanel {
     override func animationResizeTime(_ newFrame: NSRect) -> TimeInterval { 0.12 }
 
     init() {
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView()
-            // Public clear glass preserves backdrop detail and native edge refraction.
-            glass.style = .clear
-            glass.tintColor = nil
-            surface = glass
-        } else {
-            let blur = NSVisualEffectView()
-            blur.material = .hudWindow
-            blur.blendingMode = .behindWindow
-            blur.state = .active
-            blur.wantsLayer = true
-            surface = blur
-        }
+        surface = NSView()
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         title = "VisibleTab"
@@ -60,13 +49,7 @@ final class SwitcherPanel: NSPanel {
         acceptsMouseMovedEvents = true
         animationBehavior = .none
         canvas.autoresizingMask = [.width, .height]
-        if #available(macOS 26.0, *), let glass = surface as? NSGlassEffectView {
-            // The public API must own its content. Layer masking or placing an unrelated
-            // blur behind it would clip/suppress the glass rim and its native refraction.
-            glass.contentView = canvas
-        } else {
-            surface.addSubview(canvas)
-        }
+        surface = glassProfile.makeSurface(content: canvas)
         contentView = surface
         scroll.drawsBackground = false
         scroll.contentView.drawsBackground = false
@@ -99,20 +82,22 @@ final class SwitcherPanel: NSPanel {
         setAccessibilityLabel("VisibleTab application switcher")
     }
 
-    func display(ids: [Int32], selected: Int32?, tracker: ApplicationTracker,
-                 badges: [String: String], screen: NSScreen) {
-        let items = ids.map {
-            SwitcherItem(id: $0, name: tracker.applications[$0]?.localizedName ?? "Application",
-                         icon: tracker.icons[$0], badge: tracker.applications[$0]?.bundleIdentifier.flatMap { badges[$0] })
-        }
-        display(items: items, selected: selected, screen: screen)
+    func applyGlassProfile(_ profile: GlassProfile) {
+        guard profile != glassProfile else { return }
+        glassProfile = profile
+        // Recreate a plain view for Current; no private reset value is guessed.
+        canvas.removeFromSuperview()
+        surface = profile.makeSurface(content: canvas)
+        contentView = surface
     }
 
-    func display(items: [SwitcherItem], selected: Int32?, screen: NSScreen) {
+    func display(items: [SwitcherItem], selected: SwitcherTargetID?, screen: NSScreen) {
         if !isVisible {
             pointer.reset(at: NSEvent.mouseLocation)
         }
-        guard let newLayout = SwitcherLayout(applicationCount: items.count, availableSize: screen.visibleFrame.size) else {
+        let showsTitles = items.contains { $0.windowTitle != nil }
+        guard let newLayout = SwitcherLayout(applicationCount: items.count, availableSize: screen.visibleFrame.size,
+                                            showsTitles: showsTitles) else {
             orderOut(nil)
             return
         }
@@ -133,7 +118,7 @@ final class SwitcherPanel: NSPanel {
             surface.layer?.masksToBounds = true
         }
         scroll.frame = NSRect(x: newLayout.horizontalInset, y: newLayout.rowBottom,
-                              width: newLayout.viewportWidth, height: newLayout.tileSize)
+                              width: newLayout.viewportWidth, height: newLayout.rowHeight)
         let ids = items.map(\.id)
         if displayedIDs != ids {
             for cell in cells.values { cell.removeFromSuperview() }
@@ -150,17 +135,21 @@ final class SwitcherPanel: NSPanel {
             }
             displayedIDs = ids
         }
-        row.frame = NSRect(x: 0, y: 0, width: newLayout.documentWidth, height: newLayout.tileSize)
+        row.frame = NSRect(x: 0, y: 0, width: newLayout.documentWidth, height: newLayout.rowHeight)
         for (index, id) in ids.enumerated() {
             guard let cell = cells[id] else { continue }
             cell.item = items[index]
+            cell.titleBandHeight = newLayout.titleBandHeight
+            cell.titleFontSize = newLayout.labelFontSize
             cell.frame = newLayout.tileFrame(at: index)
             cell.isSelected = id == selected
+            cell.layoutTitle()
         }
         selectedIndex = selected.flatMap { ids.firstIndex(of: $0) }
         if let selected, let cell = cells[selected] {
             let inset = max(1, newLayout.tileSize / 144)
-            selectionHighlight.frame = cell.frame.insetBy(dx: inset, dy: inset)
+            selectionHighlight.frame = NSRect(x: cell.frame.minX + inset, y: newLayout.titleBandHeight + inset,
+                                               width: newLayout.tileSize - inset * 2, height: newLayout.tileSize - inset * 2)
             selectionHighlight.layer?.cornerRadius = newLayout.tileSize * 0.27
             selectionHighlight.isHidden = false
         } else { selectionHighlight.isHidden = true }
@@ -168,12 +157,13 @@ final class SwitcherPanel: NSPanel {
         nameLabel.stringValue = selected.flatMap { id in items.first { $0.id == id }?.name } ?? ""
         if let selected, let cell = cells[selected] { row.scrollToVisible(cell.frame) }
         positionCaption()
+        if showsTitles { nameLabel.isHidden = true }
         if !isKeyWindow { makeKeyAndOrderFront(nil) }
         else { orderFrontRegardless() }
     }
 
     private func positionCaption() {
-        guard let layout, let selectedIndex else { nameLabel.isHidden = true; return }
+        guard let layout, layout.titleBandHeight == 0, let selectedIndex else { nameLabel.isHidden = true; return }
         nameLabel.isHidden = false
         let width = (nameLabel.stringValue as NSString).size(withAttributes: [.font: nameLabel.font!]).width
         nameLabel.frame = layout.labelFrame(at: selectedIndex,
@@ -191,8 +181,8 @@ private final class ApplicationCell: NSView {
     var item: SwitcherItem {
         didSet { needsDisplay = true; updateAccessibility() }
     }
-    var onSelect: ((Int32, Bool) -> Void)?
-    var onMotion: ((Int32, NSPoint) -> Void)?
+    var onSelect: ((SwitcherTargetID, Bool) -> Void)?
+    var onMotion: ((SwitcherTargetID, NSPoint) -> Void)?
     var isSelected = false {
         didSet {
             if isSelected != oldValue {
@@ -201,6 +191,9 @@ private final class ApplicationCell: NSView {
             }
         }
     }
+    var titleBandHeight: CGFloat = 0
+    var titleFontSize: CGFloat = 13
+    private let titleLabel = PassiveTitleLabel(labelWithString: "")
     private var tracking: NSTrackingArea?
 
     init(item: SwitcherItem) {
@@ -208,22 +201,41 @@ private final class ApplicationCell: NSView {
         super.init(frame: .zero)
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel(item.name)
+        titleLabel.alignment = .center
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.maximumNumberOfLines = 2
+        titleLabel.cell?.wraps = true
+        titleLabel.cell?.isScrollable = false
+        titleLabel.setAccessibilityElement(false)
+        addSubview(titleLabel)
+        updateAccessibility()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     private func updateAccessibility() {
-        setAccessibilityLabel(item.name)
+        setAccessibilityLabel([item.name, item.windowTitle].compactMap { $0 }.joined(separator: ": "))
         setAccessibilityValue([isSelected ? "Selected" : nil,
                                item.badge.map { "Badge: \($0)" }].compactMap { $0 }.joined(separator: ", "))
     }
 
+    func layoutTitle() {
+        titleLabel.isHidden = item.windowTitle == nil
+        titleLabel.stringValue = item.windowTitle ?? ""
+        titleLabel.font = .systemFont(ofSize: titleFontSize, weight: isSelected ? .semibold : .regular)
+        titleLabel.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, titleBandHeight - 4))
+        toolTip = [item.name, item.windowTitle].compactMap { $0 }.joined(separator: " — ")
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         // App icons already include their optical margin; draw the full canvas.
-        (item.icon ?? NSImage(named: NSImage.applicationIconName))?.draw(in: bounds,
-            from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
-            hints: [.interpolation: NSImageInterpolation.high])
+        let iconRect = NSRect(x: 0, y: titleBandHeight, width: bounds.width, height: bounds.width)
+        if let icon = item.icon ?? ApplicationIcon.fallback, let context = NSGraphicsContext.current?.cgContext {
+            context.saveGState()
+            context.interpolationQuality = .high
+            context.draw(icon, in: iconRect)
+            context.restoreGState()
+        }
         if let badge = item.badge {
             let scale = bounds.width / 144
             let font = NSFont.systemFont(ofSize: max(10, 30 * scale), weight: .regular)
@@ -234,7 +246,7 @@ private final class ApplicationCell: NSView {
             let width = min(bounds.width * 0.7, max(height, textSize.width + 12 * scale))
             let edge = max(1, 2 * scale)
             let rect = NSRect(x: min(bounds.width * 0.86 - width / 2, bounds.maxX - width - edge),
-                              y: min(bounds.height * 0.86 - height / 2, bounds.maxY - height - edge),
+                              y: min(iconRect.minY + iconRect.height * 0.86 - height / 2, iconRect.maxY - height - edge),
                               width: width, height: height)
             let capsule = NSBezierPath(roundedRect: rect, xRadius: height / 2, yRadius: height / 2)
             NSGraphicsContext.saveGraphicsState()
@@ -272,4 +284,9 @@ private final class ApplicationCell: NSView {
     }
     override func mouseDown(with event: NSEvent) { onSelect?(item.id, true) }
     override func accessibilityPerformPress() -> Bool { onSelect?(item.id, true); return true }
+}
+
+@MainActor
+private final class PassiveTitleLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

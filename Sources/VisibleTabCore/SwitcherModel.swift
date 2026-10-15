@@ -56,19 +56,27 @@ public struct ApplicationHistory {
         rememberedOrder = Array(rememberedOrder.prefix(256))
     }
 
-    public var visible: [ApplicationRecord] {
+    public var hidden: [ApplicationRecord] { orderedRecords.filter(\.isHidden) }
+
+    private var orderedRecords: [ApplicationRecord] {
         let byID = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return order.compactMap { byID[$0] }.filter { !$0.isHidden }
+        return order.compactMap { byID[$0] }
+    }
+
+    public var visible: [ApplicationRecord] {
+        orderedRecords.filter { !$0.isHidden }
     }
 }
 
 /// The list freezes while cycling; updates remove missing apps without reshuffling it.
-public struct SwitcherSession: Equatable, Sendable {
-    public private(set) var ids: [Int32]
-    public private(set) var selectedIndex: Int
-    public var selectedID: Int32? { ids.indices.contains(selectedIndex) ? ids[selectedIndex] : nil }
+public typealias SwitcherSession = SelectionSession<Int32>
 
-    public init(ids: [Int32], currentID: Int32?, backwards: Bool = false) {
+public struct SelectionSession<ID: Hashable & Sendable>: Equatable, Sendable {
+    public private(set) var ids: [ID]
+    public private(set) var selectedIndex: Int
+    public var selectedID: ID? { ids.indices.contains(selectedIndex) ? ids[selectedIndex] : nil }
+
+    public init(ids: [ID], currentID: ID?, backwards: Bool = false) {
         self.ids = ids
         selectedIndex = 0
         guard !ids.isEmpty else { return }
@@ -86,11 +94,11 @@ public struct SwitcherSession: Equatable, Sendable {
         selectedIndex = ((selectedIndex + offset) % ids.count + ids.count) % ids.count
     }
 
-    public mutating func select(_ id: Int32) {
+    public mutating func select(_ id: ID) {
         if let index = ids.firstIndex(of: id) { selectedIndex = index }
     }
 
-    public mutating func reconcile(visibleIDs: [Int32]) {
+    public mutating func reconcile(visibleIDs: [ID]) {
         let previousSelection = selectedID
         let visible = Set(visibleIDs)
         let oldIDs = ids
