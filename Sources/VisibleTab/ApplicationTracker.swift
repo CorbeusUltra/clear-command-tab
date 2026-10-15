@@ -74,6 +74,12 @@ final class ApplicationTracker {
         records.values.map { .init(pid: $0.id, hidden: $0.isHidden) }
     }
 
+    func recordConfirmedActivation(_ pid: Int32) {
+        frontmostPID = pid
+        history.activate(pid)
+        scheduleSave()
+    }
+
     func refresh() {
         dockPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
         let ownBundle = Bundle.main.bundleIdentifier

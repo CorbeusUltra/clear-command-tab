@@ -20,7 +20,18 @@ let checks = SwitcherModelTests()
 let layoutChecks = SwitcherLayoutTests()
 let interactionChecks = PointerAndBadgeTests()
 let modeChecks = MultiModeTests()
+let focusChecks = FocusIntentTests()
 let cases: [(String, () -> Void)] = [
+    ("new selection invalidates old focus completion", focusChecks.testOpeningNextSelectionInvalidatesPreviousCompletion),
+    ("late own activation preserves the next selection", focusChecks.testLateOwnActivationDoesNotCancelNextSelection),
+    ("external cancellation and bounded activation attribution", focusChecks.testExternalCancellationAndNotificationExpiry),
+    ("failed focus does not invent logical recency", focusChecks.testFailureDoesNotCreateLogicalRecency),
+    ("rapid switching across app groups uses pending origin", focusChecks.testRapidSwitchAcrossAppGroupsUsesLogicalOrigin),
+    ("rapid same-app window switching bounces correctly", focusChecks.testRapidSameAppWindowSwitchBouncesCorrectly),
+    ("old snapshots cannot overwrite confirmed focus", focusChecks.testOldSnapshotsCannotUndoConfirmedFocus),
+    ("confirmed logical targets expire", focusChecks.testConfirmedTargetHasBoundedLifetime),
+    ("external app changes discard the previous app's focused window", focusChecks.testExternalAppChangeDoesNotUsePreviousAppsFocusedWindow),
+    ("key-window record padding and off-content down-only format", focusChecks.testKeyWindowRecordIsPaddedAndOutsideContent),
     ("app groups follow app MRU and preserve window MRU", modeChecks.testGroupingByAppThenWindowRecency),
     ("new windows join their group without changing selection", modeChecks.testNewWindowJoinsItsGroupWithoutMovingSelection),
     ("reveal activates despite Cocoa's stale hidden cache", modeChecks.testRevealActivatesDespiteStaleHiddenFlag),

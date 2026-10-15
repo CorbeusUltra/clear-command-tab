@@ -7,6 +7,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
     private let tracker = ApplicationTracker()
     private let keyboard = KeyboardTap()
     private let windows = WindowTracker()
+    private let focus = FocusCoordinator()
     private let panel = SwitcherPanel()
     private let settings = SettingsWindow()
     private let badgeReader = DockBadgeReader()
@@ -15,6 +16,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
     private var badgeReadInFlight = false
     private var session: SelectionSession<SwitcherTargetID>?
     private var sessionMode: SwitcherMode?
+    private var selectionOrigin: SwitcherTargetID?
     private var selectionGeneration = 0
     private var pendingWindowAdvances: Int?
     private var pendingWindowBackwards = false
@@ -38,6 +40,12 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
         NSApp.setActivationPolicy(.accessory)
         UserDefaults.standard.register(defaults: ["showMenuBarIcon": true, GlassProfile.preferenceKey: "altTab"])
         keyboard.delegate = self
+        focus.onTransition = { [weak self] active in self?.windows.setFocusTransition(active) }
+        focus.onConfirmed = { [weak self] target, window in
+            guard let self else { return }
+            self.tracker.recordConfirmedActivation(target.pid)
+            self.windows.recordConfirmedFocus(pid: target.pid, window: window)
+        }
         updateForegroundScreen()
         tracker.onIconsChanged = { [weak self] in
             guard let self else { return }
@@ -50,7 +58,11 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
                 self.updateForegroundScreen()
                 // H can hide the foreground app while cycling; its automatic successor
                 // must not cancel the switcher like an unrelated user activation would.
-                if self.hiddenForeground?.isHidden == true {
+                if let pid = self.tracker.frontmostPID, self.focus.consumeActivation(pid: pid) {
+                    // This may acknowledge the previous commit while another
+                    // selection is already open. Keep that selection intact.
+                    self.reconcileSelection()
+                } else if self.hiddenForeground?.isHidden == true {
                     self.hiddenForeground = nil
                     self.reconcileSelection()
                 } else { self.cancelSelection() }
@@ -167,6 +179,9 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
             status = WindowTracker.identityAvailable
                 ? "Ready. ⌘Tab: visible apps · ⌘⌥Tab: hidden apps · ⌥Tab: windows."
                 : "Ready for app switching. Option-Tab is unavailable: window identity is not supported on this macOS."
+            if !FocusCoordinator.nativeAvailable {
+                status += " Native focus is unavailable; using public activation."
+            }
         }
         else if !AXIsProcessTrusted() {
             status = "Accessibility permission is required. Grant permission, then click Check permission."
@@ -279,7 +294,14 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
             return false
         }
         if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown {
-            if sessionMode != nil && !panel.containsQuartzPoint(event.location) { cancelSelection() }
+            // The internal key-window record targets an off-content point, not a
+            // physical screen click. Never treat it as new user selection intent.
+            let top = NSScreen.screens.first?.frame.maxY ?? 0
+            let point = NSPoint(x: event.location.x, y: top - event.location.y)
+            if NSScreen.screens.contains(where: { $0.frame.contains(point) }) {
+                if sessionMode == nil { focus.cancel() }
+                else if !panel.containsQuartzPoint(event.location) { cancelSelection() }
+            }
             return false
         }
         guard type == .keyDown else { return false }
@@ -299,7 +321,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
             ownership.consumeDown(key)
             return true
         }
-        guard let mode = sessionMode else { return false }
+        guard let mode = sessionMode else { focus.cancel(); return false }
         guard mode.permits(flags), mode.isHeld(by: flags) else { cancelSelection(); return false }
         var handled = true
         switch Int(key) {
@@ -332,21 +354,28 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
     }
 
     private func candidateIDs() -> [SwitcherTargetID] {
+        let appOrder = FocusIntentPolicy.prioritizing(selectionOrigin?.pid, in: tracker.history.order)
         switch sessionMode {
-        case .applications: return tracker.history.visible.map { .application($0.id) }
+        case .applications:
+            let ids = tracker.history.visible.map { SwitcherTargetID.application($0.id) }
+            return FocusIntentPolicy.prioritizing(selectionOrigin.map { .application($0.pid) }, in: ids)
         case .hiddenApplications: return tracker.history.hidden.map { .application($0.id) }
         case .windows:
             let visiblePIDs = Set(tracker.history.visible.map(\.id))
-            return windows.history.groupedOrder(applicationOrder: tracker.history.order).filter { visiblePIDs.contains($0.pid) }
+            let windowOrder = FocusIntentPolicy.prioritizing(selectionOrigin, in: windows.history.order)
+            return WindowHistory.group(windowOrder, applicationOrder: appOrder).filter { visiblePIDs.contains($0.pid) }
         case nil: return []
         }
     }
 
     private var currentWindowID: SwitcherTargetID? {
-        windows.focusedID ?? windows.history.order.first { $0.pid == tracker.frontmostPID }
+        if case .window = selectionOrigin { return selectionOrigin }
+        if let pid = selectionOrigin?.pid { return windows.history.order.first { $0.pid == pid } }
+        return windows.history.current(focused: windows.focusedID, frontmostPID: tracker.frontmostPID)
     }
 
     private func beginSelection(mode: SwitcherMode, backwards: Bool) {
+        selectionOrigin = focus.beginSelection()
         selectionGeneration += 1
         let generation = selectionGeneration
         sessionMode = mode
@@ -356,7 +385,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
             pendingWindowBackwards = backwards
         } else {
             let current = mode == .windows ? currentWindowID :
-                tracker.frontmostPID.map { SwitcherTargetID.application($0) }
+                (selectionOrigin?.pid ?? tracker.frontmostPID).map { SwitcherTargetID.application($0) }
             session = SelectionSession(ids: candidateIDs(), currentID: current, backwards: backwards)
             guard session?.selectedID != nil else { cancelSelection(); return }
         }
@@ -442,21 +471,21 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
             return
         }
         let selected = session?.selectedID, mode = sessionMode
-        cancelSelection()
+        dismissSelection()
         guard let selected, let app = tracker.applications[selected.pid], !app.isTerminated else { return }
-        if mode == .windows {
-            windows.focus(selected, app: app) { success in if !success { NSSound.beep() } }
-        } else {
-            if mode == .applications, tracker.frontmostPID == selected.pid { return }
-            let accepted = ApplicationSwitch.commit(revealHidden: mode == .hiddenApplications,
-                                                     isHidden: app.isHidden, isTerminated: app.isTerminated,
-                                                     unhide: { app.unhide() },
-                                                     activate: { app.activate(options: [.activateAllWindows]) })
-            if !accepted { NSSound.beep() }
+        if mode == .applications, tracker.frontmostPID == selected.pid { return }
+        focus.commit(selected, app: app, record: windows.records[selected],
+                     revealHidden: mode == .hiddenApplications) { success in
+            if !success { NSSound.beep() }
         }
     }
 
     func cancelSelection() {
+        focus.cancel()
+        dismissSelection()
+    }
+
+    private func dismissSelection() {
         selectionGeneration += 1
         displayWork?.cancel()
         displayWork = nil
@@ -466,6 +495,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
         badgeRefresh = nil
         session = nil
         sessionMode = nil
+        selectionOrigin = nil
         pendingWindowAdvances = nil
         sessionScreen = nil
         hiddenForeground = nil

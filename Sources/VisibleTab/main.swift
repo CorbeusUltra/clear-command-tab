@@ -7,6 +7,7 @@ if CommandLine.arguments.contains("--diagnostics") {
     let report: [String: Any] = [
         "accessibilityTrusted": AXIsProcessTrusted(),
         "windowIdentityAvailable": WindowTracker.identityAvailable,
+        "nativeFocusAvailable": FocusCoordinator.nativeAvailable,
         "altTabGlassAvailable": GlassProfile.altTabAvailable,
         "glassProfile": GlassProfile.selected.rawValue,
         "frontmostPID": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,

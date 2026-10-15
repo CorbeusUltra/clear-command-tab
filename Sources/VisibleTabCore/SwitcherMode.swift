@@ -61,6 +61,11 @@ public struct WindowHistory: Sendable {
         Self.group(order, applicationOrder: applicationOrder)
     }
 
+    public func current(focused: SwitcherTargetID?, frontmostPID: Int32?) -> SwitcherTargetID? {
+        if let focused, focused.pid == frontmostPID, order.contains(focused) { return focused }
+        return order.first { $0.pid == frontmostPID }
+    }
+
     public static func group(_ ids: [SwitcherTargetID], applicationOrder: [Int32] = []) -> [SwitcherTargetID] {
         var pids: [Int32] = []
         var windows: [Int32: [SwitcherTargetID]] = [:]
