@@ -1,6 +1,41 @@
 import ClearCommandTabCore
 
 final class StatusMenuTests {
+    func testClosingMenuDoesNotEndItsTrackingCall() {
+        var menu = StatusMenuSession()
+        menu.beginTracking()
+        menu.menuWillOpen()
+        expectTrue(menu.deferCommand(.settings))
+        menu.menuDidClose()
+        expectFalse(menu.isOpen)
+        expectTrue(menu.isTracking)
+        expectEqual(StatusMenuCommand.matching(menuIsOpen: menu.isTracking, characters: ",", modifiers: .command), .settings)
+        // A native Settings action delivered after menuDidClose must also defer.
+        expectTrue(menu.deferCommand(.settings))
+        expectEqual(menu.finishTracking(), .settings)
+        expectFalse(menu.isTracking)
+        expectNil(StatusMenuCommand.matching(menuIsOpen: menu.isTracking, characters: ",", modifiers: .command))
+        expectNil(menu.finishTracking())
+        expectFalse(menu.deferCommand(.settings))
+    }
+
+    func testOrdinaryDismissalDoesNotRequestSettings() {
+        var menu = StatusMenuSession()
+        menu.beginTracking()
+        menu.menuWillOpen()
+        menu.menuDidClose()
+        expectNil(menu.finishTracking())
+        menu.beginTracking()
+        menu.menuWillOpen()
+        expectTrue(menu.deferCommand(.quit))
+        menu.menuDidClose()
+        expectEqual(menu.finishTracking(), .quit)
+        menu.beginTracking()
+        menu.menuWillOpen()
+        menu.menuDidClose()
+        expectNil(menu.finishTracking())
+    }
+
     func testShortcutsOnlyBelongToAnOpenMenu() {
         for character in [",", "q", "Q"] {
             expectNil(StatusMenuCommand.matching(menuIsOpen: false, characters: character, modifiers: .command))

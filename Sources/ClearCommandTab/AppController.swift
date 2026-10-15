@@ -29,9 +29,10 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     private var hiddenForeground: NSRunningApplication?
     private var statusItem: NSStatusItem?
     private var statusMenu: NSMenu?
-    private var statusMenuIsOpen = false
-    private var pendingStatusMenuCommand: StatusMenuCommand?
+    private var statusMenuSession = StatusMenuSession()
     private var statusMenuOwnedKeys: Set<UInt16> = []
+    private var settingsActivationPending = false
+    private let settingsLog = Logger(subsystem: "local.lucas.VisibleTab", category: "Settings")
     private var paused = false
     private var status = ""
     private var reportedStatus: String?
@@ -170,11 +171,28 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     @objc private func reopenFromNotification() { showSettings() }
 
     @objc private func showSettings() {
+        if statusMenuSession.deferCommand(.settings) {
+            settingsLog.notice("request deferred until menu tracking ends")
+            return
+        }
         checkPermission()
         updateControls()
         settings.showWindow(nil)
+        settingsActivationPending = true
         NSApp.activate()
         settings.window?.makeKeyAndOrderFront(nil)
+        // An accessory app's normal ordering is relative to its own windows.
+        // Settings is an explicit user request and must be above the current app.
+        settings.window?.orderFrontRegardless()
+        if NSApp.isActive { settingsActivationPending = false }
+        settingsLog.notice("present visible=\(self.settings.window?.isVisible == true) key=\(self.settings.window?.isKeyWindow == true) active=\(NSApp.isActive)")
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard settingsActivationPending else { return }
+        settingsActivationPending = false
+        if settings.window?.isVisible == true { settings.window?.makeKeyAndOrderFront(nil) }
+        settingsLog.notice("activation confirmed key=\(self.settings.window?.isKeyWindow == true)")
     }
 
     @objc private func checkPermission() {
@@ -221,6 +239,8 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             item.button?.image = image
             let menu = NSMenu()
             menu.delegate = self
+            NotificationCenter.default.addObserver(self, selector: #selector(statusMenuTrackingEnded),
+                                                    name: NSMenu.didEndTrackingNotification, object: menu)
             let state = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             state.tag = 1
             menu.addItem(state)
@@ -241,6 +261,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
             statusItem = item
         } else if !visible, let item = statusItem {
+            NotificationCenter.default.removeObserver(self, name: NSMenu.didEndTrackingNotification, object: statusMenu)
             NSStatusBar.system.removeStatusItem(item)
             statusItem = nil
             statusMenu = nil
@@ -262,6 +283,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
                 // Associate the actual status-item menu while tracking, so AppKit
                 // owns highlighting, positioning, dismissal, and key equivalents.
                 item.menu = menu
+                statusMenuSession.beginTracking()
                 button.performClick(nil)
             }
         } else { togglePause() }
@@ -269,30 +291,41 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
 
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusMenu else { return }
-        statusMenuIsOpen = true
+        statusMenuSession.menuWillOpen()
         cancelSelection()
         statusItem?.button?.highlight(true)
     }
 
     func menuDidClose(_ menu: NSMenu) {
         guard menu === statusMenu else { return }
-        statusMenuIsOpen = false
+        statusMenuSession.menuDidClose()
         statusItem?.button?.highlight(false)
-        // Restore left-click toggling after either dismissal or a menu action.
+        settingsLog.notice("menu closed; tracking completion still pending")
+    }
+
+    @objc private func statusMenuTrackingEnded(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu, menu === statusMenu else { return }
+        // DispatchQueue.main also runs in nested tracking loops. Wait for AppKit's
+        // explicit end notification and the ordinary application run-loop mode.
+        let menuID = ObjectIdentifier(menu)
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            MainActor.assumeIsolated { self?.finishStatusMenuTracking(menuID) }
+        }
+    }
+
+    private func finishStatusMenuTracking(_ menuID: ObjectIdentifier) {
+        guard let menu = statusMenu, ObjectIdentifier(menu) == menuID,
+              statusMenuSession.isTracking, !statusMenuSession.isOpen else { return }
+        let command = statusMenuSession.finishTracking()
         statusItem?.menu = nil
         statusItem?.button?.target = self
         statusItem?.button?.action = #selector(statusItemClicked)
         statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        if let command = pendingStatusMenuCommand {
-            pendingStatusMenuCommand = nil
-            // Settings may activate the app only after tracking has relinquished
-            // keyboard focus. The original shortcut is consumed, not reposted.
-            DispatchQueue.main.async { [weak self] in
-                switch command {
-                case .settings: self?.showSettings()
-                case .quit: NSApp.terminate(nil)
-                }
-            }
+        settingsLog.notice("menu tracking finished pending=\(command == .settings ? "settings" : command == .quit ? "quit" : "none", privacy: .public)")
+        switch command {
+        case .settings: showSettings()
+        case .quit: NSApp.terminate(nil)
+        case nil: break
         }
     }
 
@@ -301,7 +334,9 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
                              action: UnsafeMutablePointer<Selector?>) -> Bool {
         // Keep the native path available even while switching is paused and its
         // event tap is stopped. Resolve an explicit target rather than a responder.
-        guard let command = StatusMenuCommand.matching(menuIsOpen: menu === statusMenu && statusMenuIsOpen,
+        // AppKit may resolve the action after menuDidClose. It still belongs to
+        // this tracking session until the end notification has been processed.
+        guard let command = StatusMenuCommand.matching(menuIsOpen: menu === statusMenu && statusMenuSession.isTracking,
                     characters: event.charactersIgnoringModifiers,
                     modifiers: modifiers(CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue)))) else { return false }
         switch command {
@@ -350,14 +385,14 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             return ownership.consumeUp(key) || menuOwned
         }
         if type == .keyDown, statusMenuOwnedKeys.contains(key) { return true }
-        if statusMenuIsOpen {
+        if statusMenuSession.isOpen {
             guard type == .keyDown,
                   let command = StatusMenuCommand.matching(menuIsOpen: true,
                     characters: NSEvent(cgEvent: event)?.charactersIgnoringModifiers,
                     modifiers: modifiers(event.flags)), let menu = statusMenu else { return false }
             statusMenuOwnedKeys.insert(key)
-            if pendingStatusMenuCommand == nil {
-                pendingStatusMenuCommand = command
+            if statusMenuSession.deferCommand(command) {
+                settingsLog.notice("menu command queued action=\(command == .settings ? "settings" : "quit", privacy: .public)")
                 // Do not reenter AppKit menu tracking from the event-tap callback.
                 // Common modes also run while the native menu is tracking.
                 CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {

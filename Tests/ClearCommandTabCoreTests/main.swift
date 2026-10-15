@@ -24,6 +24,8 @@ let focusChecks = FocusIntentTests()
 let presentationChecks = PresentationTests()
 let statusMenuChecks = StatusMenuTests()
 let cases: [(String, () -> Void)] = [
+    ("settings waits for tracking completion, including native action after close callback", statusMenuChecks.testClosingMenuDoesNotEndItsTrackingCall),
+    ("ordinary menu dismissal and later openings cannot replay commands", statusMenuChecks.testOrdinaryDismissalDoesNotRequestSettings),
     ("menu shortcuts never intercept another app's commands", statusMenuChecks.testShortcutsOnlyBelongToAnOpenMenu),
     ("unrelated menu keys and modifier combinations pass through", statusMenuChecks.testUnrelatedMenuKeysPassThrough),
     ("quick MRU commit never reveals the panel", presentationChecks.testQuickMRUCommitNeverRevealsPanel),
