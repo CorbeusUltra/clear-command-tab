@@ -21,7 +21,13 @@ let layoutChecks = SwitcherLayoutTests()
 let interactionChecks = PointerAndBadgeTests()
 let modeChecks = MultiModeTests()
 let focusChecks = FocusIntentTests()
+let presentationChecks = PresentationTests()
 let cases: [(String, () -> Void)] = [
+    ("quick MRU commit never reveals the panel", presentationChecks.testQuickMRUCommitNeverRevealsPanel),
+    ("held application chords reveal at 150 ms", presentationChecks.testHeldApplicationChordsRevealAt150Milliseconds),
+    ("further navigation shows the panel immediately", presentationChecks.testFurtherNavigationShowsImmediately),
+    ("new gesture cannot reuse an old display deadline", presentationChecks.testRestartedGestureDoesNotUseOldDisplayDeadline),
+    ("unverified focus is not an audible rejection", presentationChecks.testUnverifiedFocusDoesNotSoundLikeRejectedAction),
     ("reveal observes real state despite a negative advisory return", focusChecks.testRevealUsesObservedStateRatherThanRequestReturnValue),
     ("reveal waits for the selected app and resumes once", focusChecks.testRevealWaitsForSelectedAppAndOnlyRunsOnce),
     ("cancelled or superseded reveal cannot resume", focusChecks.testCancelledOrSupersededRevealCannotResume),

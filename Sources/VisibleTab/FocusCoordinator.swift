@@ -5,6 +5,7 @@ import os
 import VisibleTabCore
 
 private let revealLog = Logger(subsystem: "local.lucas.VisibleTab", category: "RevealFocus")
+private let focusLog = Logger(subsystem: "local.lucas.VisibleTab", category: "Focus")
 
 private final class FocusTicket: @unchecked Sendable {
     private let lock = NSLock()
@@ -97,7 +98,19 @@ private enum FocusActions {
         return .init(error: result.rawValue, hidden: after)
     }
 
-    static func appWindow(pid: Int32, ticket: FocusTicket) -> TrackedWindow? {
+    static func appWindow(pid: Int32, preferred: TrackedWindow?, ticket: FocusTicket) -> TrackedWindow? {
+        if let preferred, case .window(let owner, let number) = preferred.id, owner == pid, ticket.valid,
+           let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, number) as? [[String: Any]],
+           let surface = info.first(where: { $0[kCGWindowOwnerPID as String] as? Int32 == pid &&
+               $0[kCGWindowNumber as String] as? UInt32 == number }) {
+            AXUIElementSetMessagingTimeout(preferred.element, 0.025)
+            // Hidden/off-Space cache entries may since have been minimized. Never
+            // use an unknown minimized state to bring such a cached window forward.
+            if surface[kCGWindowIsOnscreen as String] as? Bool == true ||
+                value(preferred.element, kAXMinimizedAttribute) as Bool? == false {
+                return preferred
+            }
+        }
         let application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, 0.025)
         for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
@@ -133,7 +146,7 @@ private enum FocusActions {
             window = record
             allWindows = false
         case .application(let pid):
-            window = appWindow(pid: pid, ticket: ticket)
+            window = appWindow(pid: pid, preferred: record, ticket: ticket)
             // Unhide already restores the app's windows. Focus its real window
             // with the same user-generated mode as Option-Tab, not a bulk front.
             allWindows = !revealed
@@ -165,16 +178,21 @@ private enum FocusActions {
     static func observe(pid: Int32, ticket: FocusTicket) -> FocusObservation {
         guard ticket.valid else { return .init() }
         let system = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(system, 0.025)
+        // Confirmation has its own queue and budget: it must neither time out at
+        // the action's 25 ms limit nor block a newer focus action behind this read.
+        AXUIElementSetMessagingTimeout(system, 0.1)
         guard let focusedApp: AXUIElement = value(system, kAXFocusedApplicationAttribute) else { return .init() }
         var focusedPID: pid_t = 0
         guard AXUIElementGetPid(focusedApp, &focusedPID) == .success else { return .init() }
         var observation = FocusObservation(appPID: focusedPID)
         guard focusedPID == pid, ticket.valid else { return observation }
-        AXUIElementSetMessagingTimeout(focusedApp, 0.025)
+        AXUIElementSetMessagingTimeout(focusedApp, 0.1)
         if let element: AXUIElement = value(focusedApp, kAXFocusedWindowAttribute),
-           let number = WindowIdentity.number(element) {
-            observation.window = .window(pid: pid, number: number)
+           ticket.valid {
+            AXUIElementSetMessagingTimeout(element, 0.1)
+            if let number = WindowIdentity.number(element) {
+                observation.window = .window(pid: pid, number: number)
+            }
         }
         return observation
     }
@@ -187,7 +205,7 @@ private struct PendingReveal {
     let revision: UInt64
     let ticket: FocusTicket
     let native: Bool
-    let completion: (Bool) -> Void
+    let completion: (FocusResult) -> Void
 }
 
 /// One focus queue for all modes. Every action/readback belongs to an intent;
@@ -217,6 +235,7 @@ final class FocusCoordinator {
         if let revealObserver { NSWorkspace.shared.notificationCenter.removeObserver(revealObserver) }
     }
     private let queue = DispatchQueue(label: "local.lucas.VisibleTab.focus", qos: .userInteractive)
+    private let observationQueue = DispatchQueue(label: "local.lucas.VisibleTab.focusReadback", qos: .utility)
 
     func beginSelection() -> SwitcherTargetID? {
         if tracingReveal { revealLog.notice("cancel new-selection revision=\(self.policy.revision)") }
@@ -242,7 +261,7 @@ final class FocusCoordinator {
     }
 
     func commit(_ target: SwitcherTargetID, app: NSRunningApplication, record: TrackedWindow?,
-                revealHidden: Bool, completion: @escaping (Bool) -> Void) {
+                revealHidden: Bool, completion: @escaping (FocusResult) -> Void) {
         ticket?.cancel()
         let ticket = FocusTicket()
         self.ticket = ticket
@@ -251,7 +270,7 @@ final class FocusCoordinator {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             // An action waiting in the queue or a slow AX read must also settle.
             // This deadline only clears bookkeeping; it never retries focus.
-            self?.complete(revision, ticket: ticket, observed: nil, target: target, completion: completion)
+            self?.complete(revision, ticket: ticket, observed: nil, target: target, result: .unverified, completion: completion)
         }
         clearReveal()
         let wasHidden = app.isHidden
@@ -338,9 +357,10 @@ final class FocusCoordinator {
         guard policy.isCurrent(revision), ticket.valid, !request.app.isTerminated else { return }
         if !request.native {
             let activated = request.app.activate(options: target == .application(target.pid) ? [.activateAllWindows] : [])
-            guard activated else {
-                complete(revision, ticket: ticket, observed: nil, target: target, completion: request.completion)
-                return
+            if !activated {
+                // As with unhide, use actual focus observations rather than
+                // turning an advisory Cocoa return into an immediate error sound.
+                focusLog.notice("public activation returned false pid=\(target.pid)")
             }
         }
         queue.async { [weak self] in
@@ -366,9 +386,9 @@ final class FocusCoordinator {
     }
 
     private func confirm(_ target: SwitcherTargetID, expectedWindow: SwitcherTargetID?, revision: UInt64, ticket: FocusTicket, attempt: Int,
-                         completion: @escaping (Bool) -> Void) {
+                         completion: @escaping (FocusResult) -> Void) {
         guard policy.isCurrent(revision), ticket.valid else { return }
-        queue.async { [weak self] in
+        observationQueue.async { [weak self] in
             let observation = FocusActions.observe(pid: target.pid, ticket: ticket)
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.policy.isCurrent(revision), ticket.valid else { return }
@@ -381,7 +401,7 @@ final class FocusCoordinator {
                 }
                 if matches {
                     self.complete(revision, ticket: ticket, observed: observation.window, target: target,
-                                  success: true, completion: completion)
+                                  result: .confirmed, completion: completion)
                 } else {
                     // Read-only, bounded confirmation. No delayed reactivation that
                     // could steal focus after the user has moved on to another app.
@@ -391,7 +411,7 @@ final class FocusCoordinator {
                             self?.confirm(target, expectedWindow: expectedWindow, revision: revision, ticket: ticket, attempt: attempt + 1, completion: completion)
                         }
                     } else {
-                        self.complete(revision, ticket: ticket, observed: nil, target: target, completion: completion)
+                        self.complete(revision, ticket: ticket, observed: nil, target: target, result: .unverified, completion: completion)
                     }
                 }
             }
@@ -399,14 +419,17 @@ final class FocusCoordinator {
     }
 
     private func complete(_ revision: UInt64, ticket: FocusTicket, observed: SwitcherTargetID?, target: SwitcherTargetID,
-                          success: Bool = false, completion: (Bool) -> Void) {
-        guard self.ticket === ticket, policy.complete(revision, observed: success) else { return }
-        if tracingReveal { revealLog.notice("complete revision=\(revision) success=\(success)") }
+                          result: FocusResult = .failed, completion: (FocusResult) -> Void) {
+        guard self.ticket === ticket, policy.complete(revision, observed: result == .confirmed) else { return }
+        if tracingReveal { revealLog.notice("complete revision=\(revision) result=\(result.rawValue, privacy: .public)") }
+        if result != .confirmed {
+            focusLog.notice("result=\(result.rawValue, privacy: .public) pid=\(target.pid) revision=\(revision)")
+        }
         clearReveal()
         ticket.cancel()
         self.ticket = nil
-        if success { onConfirmed?(target, observed) }
+        if result == .confirmed { onConfirmed?(target, observed) }
         onTransition?(false)
-        completion(success)
+        completion(result)
     }
 }

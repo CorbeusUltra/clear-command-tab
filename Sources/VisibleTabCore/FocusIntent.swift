@@ -1,5 +1,11 @@
 import Foundation
 
+/// An IPC timeout is missing evidence, not proof that a dispatched action failed.
+public enum FocusResult: String, Sendable {
+    case confirmed, unverified, failed
+    public var shouldBeep: Bool { self == .failed }
+}
+
 /// An accepted unhide request is not its completion. Only the selected app's
 /// acknowledgement can release the gate; duplicate or unrelated notices do nothing.
 public struct ApplicationRevealGate: Sendable {

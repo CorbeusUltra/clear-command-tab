@@ -1,9 +1,10 @@
 import AppKit
 import Carbon
+import os
 import VisibleTabCore
 
 @MainActor
-final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate {
+final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate, NSMenuDelegate {
     private let tracker = ApplicationTracker()
     private let keyboard = KeyboardTap()
     private let windows = WindowTracker()
@@ -22,14 +23,16 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
     private var pendingWindowBackwards = false
     private var ownership = KeyOwnership()
     private var displayWork: DispatchWorkItem?
+    private var presentation = SelectionPresentation()
     private var sessionWatchdog: Timer?
     private var sessionScreen: NSScreen?
     private var hiddenForeground: NSRunningApplication?
     private var statusItem: NSStatusItem?
-    private var pauseMenuItem: NSMenuItem?
     private var statusMenu: NSMenu?
+    private var statusMenuIsOpen = false
     private var paused = false
     private var status = ""
+    private var reportedStatus: String?
     private var observers: [NSObjectProtocol] = []
     private let preview = CommandLine.arguments.contains("--preview")
     private var cachedForegroundScreen: NSScreen?
@@ -189,6 +192,10 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
             status = "Could not intercept the keyboard. Command-Tab is handled by macOS. Try Check permission."
         }
         windows.setEnabled(keyboard.isRunning && !paused)
+        if reportedStatus != status {
+            Logger(subsystem: "local.lucas.VisibleTab", category: "Lifecycle").notice("status=\(self.status, privacy: .public)")
+            reportedStatus = status
+        }
         refreshWindows()
         updateControls()
     }
@@ -211,20 +218,21 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
             image?.isTemplate = true
             item.button?.image = image
             let menu = NSMenu()
+            menu.delegate = self
             let state = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             state.tag = 1
             menu.addItem(state)
             menu.addItem(.separator())
-            let pause = NSMenuItem(title: "Pause", action: #selector(togglePause), keyEquivalent: "")
-            pause.target = self
-            pauseMenuItem = pause
-            menu.addItem(pause)
-            let preferences = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: "")
+            let preferences = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
             preferences.target = self
+            preferences.keyEquivalentModifierMask = .command
             menu.addItem(preferences)
             menu.addItem(.separator())
-            menu.addItem(NSMenuItem(title: preview ? "Quit Preview" : "Quit VisibleTab",
-                                   action: #selector(NSApplication.terminate(_:)), keyEquivalent: ""))
+            let quit = NSMenuItem(title: preview ? "Quit Preview" : "Quit VisibleTab",
+                                  action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+            quit.target = NSApp
+            quit.keyEquivalentModifierMask = .command
+            menu.addItem(quit)
             statusMenu = menu
             item.button?.target = self
             item.button?.action = #selector(statusItemClicked)
@@ -233,7 +241,6 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
         } else if !visible, let item = statusItem {
             NSStatusBar.system.removeStatusItem(item)
             statusItem = nil
-            pauseMenuItem = nil
             statusMenu = nil
         }
         statusItem?.button?.toolTip = "VisibleTab — \(status)\nClick to \(paused ? "resume" : "pause"); right-click for Settings and Quit."
@@ -243,17 +250,37 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
         statusItem?.button?.image = image
         statusItem?.button?.appearsDisabled = paused || (!preview && !keyboard.isRunning)
         statusMenu?.item(withTag: 1)?.title = paused ? "Paused" : keyboard.isRunning ? "Ready" : "Permission required"
-        pauseMenuItem?.title = paused ? "Resume" : "Pause"
         settings.update(status: status, paused: paused, iconVisible: visible, glassProfile: GlassProfile.selected)
     }
 
     @objc private func statusItemClicked() {
         guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
-            if let button = statusItem?.button, let menu = statusMenu {
-                menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
+            if let item = statusItem, let button = item.button, let menu = statusMenu {
+                // Associate the actual status-item menu while tracking, so AppKit
+                // owns highlighting, positioning, dismissal, and key equivalents.
+                item.menu = menu
+                button.performClick(nil)
             }
         } else { togglePause() }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === statusMenu else { return }
+        statusMenuIsOpen = true
+        cancelSelection()
+        statusItem?.button?.highlight(true)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === statusMenu else { return }
+        statusMenuIsOpen = false
+        statusItem?.button?.highlight(false)
+        // Restore left-click toggling after either dismissal or a menu action.
+        statusItem?.menu = nil
+        statusItem?.button?.target = self
+        statusItem?.button?.action = #selector(statusItemClicked)
+        statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
     }
 
     private func refreshWindows(completion: (() -> Void)? = nil) {
@@ -289,6 +316,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
 
     func handleKey(type: CGEventType, event: CGEvent) -> Bool {
         if type == .keyUp { return ownership.consumeUp(UInt16(event.getIntegerValueField(.keyboardEventKeycode))) }
+        if statusMenuIsOpen { return false }
         if type == .flagsChanged {
             if let mode = sessionMode, !mode.isHeld(by: modifiers(event.flags)) { finishSelection() }
             return false
@@ -310,9 +338,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
         if key == UInt16(kVK_Tab) {
             if let mode = sessionMode {
                 guard mode.permits(flags), mode.isHeld(by: flags) else { cancelSelection(); return false }
-                let direction = flags.contains(.shift) ? -1 : 1
-                if session != nil { session?.advance(direction); renderIfVisible() }
-                else if pendingWindowAdvances != nil { pendingWindowAdvances! += direction }
+                navigateSelection(flags.contains(.shift) ? -1 : 1)
             } else {
                 guard let mode = SwitcherMode.starting(with: flags),
                       mode != .windows || WindowTracker.identityAvailable else { return false }
@@ -327,11 +353,9 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
         switch Int(key) {
         case kVK_Escape: cancelSelection()
         case kVK_LeftArrow, kVK_ANSI_Grave:
-            if session != nil { session?.advance(-1); renderIfVisible() }
-            else if pendingWindowAdvances != nil { pendingWindowAdvances! -= 1 }
+            navigateSelection(-1)
         case kVK_RightArrow:
-            if session != nil { session?.advance(1); renderIfVisible() }
-            else if pendingWindowAdvances != nil { pendingWindowAdvances! += 1 }
+            navigateSelection(1)
         default:
             let letter = NSEvent(cgEvent: event)?.charactersIgnoringModifiers?.lowercased()
             if mode == .applications, letter == "h", let id = session?.selectedID {
@@ -379,6 +403,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
         selectionGeneration += 1
         let generation = selectionGeneration
         sessionMode = mode
+        presentation.begin(mode: mode, now: ProcessInfo.processInfo.systemUptime)
         sessionScreen = foregroundScreen()
         if mode == .windows, windows.history.order.isEmpty {
             pendingWindowAdvances = 0
@@ -394,9 +419,12 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
             MainActor.assumeIsolated { self?.refreshBadges() }
         }
         if let badgeRefresh { RunLoop.main.add(badgeRefresh, forMode: .common) }
-        let work = DispatchWorkItem { [weak self] in self?.renderSelection() }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.selectionGeneration == generation else { return }
+            self.renderSelection()
+        }
         displayWork = work
-        DispatchQueue.main.async(execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + presentation.delayRemaining(now: ProcessInfo.processInfo.systemUptime), execute: work)
         sessionWatchdog = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, let mode = self.sessionMode else { return }
@@ -434,9 +462,19 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
         else { renderIfVisible() }
     }
 
+    private func navigateSelection(_ direction: Int) {
+        presentation.navigate(now: ProcessInfo.processInfo.systemUptime)
+        displayWork?.cancel()
+        displayWork = nil
+        if session != nil { session?.advance(direction); renderSelection() }
+        else if pendingWindowAdvances != nil { pendingWindowAdvances! += direction }
+    }
+
     private func renderIfVisible() { if panel.isVisible { renderSelection() } }
 
     private func renderSelection() {
+        guard presentation.permitsDisplay(now: ProcessInfo.processInfo.systemUptime),
+              let mode = sessionMode, mode.isHeld(by: heldModifiers) else { return }
         guard let session, let screen = sessionScreen ?? NSScreen.main ?? NSScreen.screens.first else { return }
         let items = session.ids.map { id -> SwitcherItem in
             let app = tracker.presentations[id.pid]
@@ -474,9 +512,10 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
         dismissSelection()
         guard let selected, let app = tracker.applications[selected.pid], !app.isTerminated else { return }
         if mode == .applications, tracker.frontmostPID == selected.pid { return }
-        focus.commit(selected, app: app, record: windows.records[selected],
-                     revealHidden: mode == .hiddenApplications) { success in
-            if !success { NSSound.beep() }
+        let record = mode == .windows ? windows.records[selected] : windows.preferredWindow(for: selected.pid)
+        focus.commit(selected, app: app, record: record,
+                     revealHidden: mode == .hiddenApplications) { result in
+            if result.shouldBeep { NSSound.beep() }
         }
     }
 
@@ -486,6 +525,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
     }
 
     private func dismissSelection() {
+        presentation.cancel()
         selectionGeneration += 1
         displayWork?.cancel()
         displayWork = nil

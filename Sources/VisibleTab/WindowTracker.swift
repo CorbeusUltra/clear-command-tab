@@ -185,6 +185,9 @@ final class WindowTracker {
     private(set) var history = WindowHistory()
     private(set) var focusedID: SwitcherTargetID?
     private(set) var foregroundBounds: CGRect?
+    // One MRU window per app survives Hide. The focus queue rechecks WindowServer
+    // ownership before using its ID; a slow AX main-window query is then unnecessary.
+    private var recentAppWindows: [Int32: TrackedWindow] = [:]
     var onChange: (() -> Void)?
     private let queue = DispatchQueue(label: "local.lucas.VisibleTab.windows", qos: .utility)
     private var focusEpoch = WindowSnapshotEpoch()
@@ -204,6 +207,7 @@ final class WindowTracker {
         focusEpoch.setTransitioning(false)
         generation += 1
         records.removeAll()
+        recentAppWindows.removeAll()
         history = WindowHistory()
         focusedID = nil
         foregroundBounds = nil
@@ -219,6 +223,7 @@ final class WindowTracker {
             refreshWork = nil
             completions.removeAll()
             records.removeAll()
+            recentAppWindows.removeAll()
             focusedID = nil
             history = WindowHistory()
             let scanner = self.scanner
@@ -228,6 +233,8 @@ final class WindowTracker {
 
     func refresh(applications: [WindowApplication], frontmost: Int32?, completion: (() -> Void)? = nil) {
         self.inputs = applications
+        let livePIDs = Set(applications.map(\.pid))
+        recentAppWindows = recentAppWindows.filter { livePIDs.contains($0.key) }
         updateFrontmost(frontmost)
         guard enabled else { completion?(); return }
         if let completion { completions.append(completion) }
@@ -276,6 +283,9 @@ final class WindowTracker {
                         self.foregroundBounds = snapshot.foregroundBounds
                         self.history.activate(snapshot.focused)
                     }
+                    for id in self.history.order.reversed() {
+                        if let record = self.records[id] { self.recentAppWindows[id.pid] = record }
+                    }
                     self.onChange?()
                     callbacks.forEach { $0() }
                 } else if self.enabled && self.generation == generation {
@@ -302,7 +312,13 @@ final class WindowTracker {
         updateFrontmost(pid)
         focusedID = window
         history.activate(window)
+        if let window, let record = records[window] { recentAppWindows[pid] = record }
         onChange?()
+    }
+
+    func preferredWindow(for pid: Int32) -> TrackedWindow? {
+        if let id = history.order.first(where: { $0.pid == pid }), let record = records[id] { return record }
+        return recentAppWindows[pid]
     }
 
     private func updateFrontmost(_ pid: Int32?) {
