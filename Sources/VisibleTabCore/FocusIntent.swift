@@ -1,5 +1,30 @@
 import Foundation
 
+/// An accepted unhide request is not its completion. Only the selected app's
+/// acknowledgement can release the gate; duplicate or unrelated notices do nothing.
+public struct ApplicationRevealGate: Sendable {
+    private var pid: Int32?
+    public init() {}
+    public mutating func wait(for pid: Int32) { self.pid = pid }
+    public mutating func cancel() { pid = nil }
+    public mutating func acknowledge(_ pid: Int32) -> Bool {
+        guard self.pid == pid else { return false }
+        self.pid = nil
+        return true
+    }
+}
+
+public enum FocusConfirmation {
+    public static func matches(target: SwitcherTargetID, expectedWindow: SwitcherTargetID?,
+                               frontmostPID: Int32?, keyboardPID: Int32?, window: SwitcherTargetID?) -> Bool {
+        guard frontmostPID == target.pid, keyboardPID == target.pid else { return false }
+        switch target {
+        case .window: return window == target
+        case .application: return expectedWindow == nil || window == expectedWindow
+        }
+    }
+}
+
 /// Own activation notifications can arrive after the next shortcut has started.
 /// Only the latest request may complete; a short-lived logical target seeds rapid
 /// switching without changing the history before focus has actually been observed.

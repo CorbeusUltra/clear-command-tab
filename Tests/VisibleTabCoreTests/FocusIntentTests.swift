@@ -5,6 +5,50 @@ final class FocusIntentTests {
     private let a = SwitcherTargetID.window(pid: 1, number: 10)
     private let b = SwitcherTargetID.window(pid: 2, number: 20)
 
+    func testRevealWaitsForSelectedAppAndOnlyRunsOnce() {
+        var gate = ApplicationRevealGate()
+        expectFalse(gate.acknowledge(1))
+        gate.wait(for: 1)
+        expectFalse(gate.acknowledge(2))
+        expectTrue(gate.acknowledge(1))
+        expectFalse(gate.acknowledge(1))
+    }
+
+    func testCancelledOrSupersededRevealCannotResume() {
+        var gate = ApplicationRevealGate()
+        var policy = FocusIntentPolicy()
+        let old = policy.request(.application(1), now: 10)
+        gate.wait(for: 1)
+        gate.cancel()
+        _ = policy.beginSelection(now: 10.01)
+        expectFalse(gate.acknowledge(1))
+        expectFalse(policy.isCurrent(old))
+        let latest = policy.request(.application(2), now: 10.02)
+        gate.wait(for: 2)
+        expectFalse(gate.acknowledge(1))
+        expectTrue(gate.acknowledge(2))
+        expectTrue(policy.isCurrent(latest))
+    }
+
+    func testRevealedWindowNeedsBothRealKeyboardAndWindowFocus() {
+        let app = SwitcherTargetID.application(1)
+        expectFalse(FocusConfirmation.matches(target: app, expectedWindow: a,
+                                               frontmostPID: 2, keyboardPID: 2, window: a))
+        expectFalse(FocusConfirmation.matches(target: app, expectedWindow: a,
+                                               frontmostPID: 1, keyboardPID: 2, window: a))
+        expectFalse(FocusConfirmation.matches(target: app, expectedWindow: a,
+                                               frontmostPID: 1, keyboardPID: 1, window: nil))
+        expectFalse(FocusConfirmation.matches(target: app, expectedWindow: a,
+                                               frontmostPID: 1, keyboardPID: 1,
+                                               window: .window(pid: 1, number: 11)))
+        expectTrue(FocusConfirmation.matches(target: app, expectedWindow: a,
+                                              frontmostPID: 1, keyboardPID: 1, window: a))
+        expectTrue(FocusConfirmation.matches(target: app, expectedWindow: nil,
+                                              frontmostPID: 1, keyboardPID: 1, window: nil))
+        expectFalse(FocusConfirmation.matches(target: a, expectedWindow: nil,
+                                               frontmostPID: 1, keyboardPID: 1, window: nil))
+    }
+
     func testOpeningNextSelectionInvalidatesPreviousCompletion() {
         var policy = FocusIntentPolicy()
         let old = policy.request(a, now: 10)

@@ -22,6 +22,9 @@ let interactionChecks = PointerAndBadgeTests()
 let modeChecks = MultiModeTests()
 let focusChecks = FocusIntentTests()
 let cases: [(String, () -> Void)] = [
+    ("reveal waits for the selected app and resumes once", focusChecks.testRevealWaitsForSelectedAppAndOnlyRunsOnce),
+    ("cancelled or superseded reveal cannot resume", focusChecks.testCancelledOrSupersededRevealCannotResume),
+    ("revealed window requires real keyboard and exact window focus", focusChecks.testRevealedWindowNeedsBothRealKeyboardAndWindowFocus),
     ("new selection invalidates old focus completion", focusChecks.testOpeningNextSelectionInvalidatesPreviousCompletion),
     ("late own activation preserves the next selection", focusChecks.testLateOwnActivationDoesNotCancelNextSelection),
     ("external cancellation and bounded activation attribution", focusChecks.testExternalCancellationAndNotificationExpiry),

@@ -1,7 +1,10 @@
 import AppKit
 import Carbon
 import Darwin
+import os
 import VisibleTabCore
+
+private let revealLog = Logger(subsystem: "local.lucas.VisibleTab", category: "RevealFocus")
 
 private final class FocusTicket: @unchecked Sendable {
     private let lock = NSLock()
@@ -32,21 +35,29 @@ private enum NativeFocusBridge {
         return unsafeBitCast(symbol, to: type)
     }
 
-    static func focus(pid: Int32, window: CGWindowID?, allWindows: Bool, ticket: FocusTicket) -> Bool {
+    static func focus(pid: Int32, window: CGWindowID?, allWindows: Bool, ticket: FocusTicket, trace: Bool) -> Bool {
         guard ticket.valid, let lookup, let front, let post else { return false }
         var process = ProcessSerialNumber()
         guard lookup(pid, &process) == noErr, ticket.valid else { return false }
         // A validated shortcut is user intent. All-windows is reserved for app mode.
         let flags: UInt32 = 0x200 | (allWindows ? 0x100 : 0)
-        guard front(&process, window ?? kCGNullWindowID, flags) == .success, ticket.valid else { return false }
+        let result = front(&process, window ?? kCGNullWindowID, flags)
+        if trace { revealLog.notice("front pid=\(pid) window=\(window ?? 0) flags=\(flags) result=\(result.rawValue)") }
+        guard result == .success, ticket.valid else { return false }
         if let window {
             var record = KeyWindowEventRecord.bytes(window: window)
-            guard ticket.valid, record.withUnsafeMutableBufferPointer({ post(&process, $0.baseAddress!) }) == .success else {
-                return false
-            }
+            guard ticket.valid else { return false }
+            let result = record.withUnsafeMutableBufferPointer { post(&process, $0.baseAddress!) }
+            if trace { revealLog.notice("key window=\(window) result=\(result.rawValue)") }
+            guard result == .success else { return false }
         }
         return ticket.valid
     }
+}
+
+private struct FocusDispatch: Sendable {
+    var sent = false
+    var expectedWindow: SwitcherTargetID?
 }
 
 private struct FocusObservation: Sendable {
@@ -86,36 +97,44 @@ private enum FocusActions {
             value(record.element, kAXMinimizedAttribute) as Bool? != true && ticket.valid
     }
 
-    static func perform(target: SwitcherTargetID, record: TrackedWindow?, native: Bool, ticket: FocusTicket) -> Bool {
-        guard ticket.valid else { return false }
+    static func perform(target: SwitcherTargetID, record: TrackedWindow?, native: Bool,
+                        revealed: Bool, ticket: FocusTicket) -> FocusDispatch {
+        guard ticket.valid else { return .init() }
         let window: TrackedWindow?
         let allWindows: Bool
         switch target {
         case .window:
-            guard let record, validWindow(record, ticket: ticket) else { return false }
+            guard let record, validWindow(record, ticket: ticket) else { return .init() }
             window = record
             allWindows = false
         case .application(let pid):
             window = appWindow(pid: pid, ticket: ticket)
-            allWindows = true
+            // Unhide already restores the app's windows. Focus its real window
+            // with the same user-generated mode as Option-Tab, not a bulk front.
+            allWindows = !revealed
         }
-        guard ticket.valid else { return false }
+        guard ticket.valid else { return .init() }
+        if revealed { revealLog.notice("resolved pid=\(target.pid) window=\(String(describing: window?.id), privacy: .public)") }
         if native {
             let number: CGWindowID?
             if case .window(_, let id) = window?.id { number = id } else { number = nil }
-            guard NativeFocusBridge.focus(pid: target.pid, window: number, allWindows: allWindows, ticket: ticket) else { return false }
+            guard NativeFocusBridge.focus(pid: target.pid, window: number, allWindows: allWindows,
+                                          ticket: ticket, trace: revealed) else { return .init() }
         } else if let window {
             // Public fallback for a future OS without the optional bridge.
             _ = AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, kCFBooleanTrue)
-            guard ticket.valid else { return false }
+            guard ticket.valid else { return .init() }
             let application = AXUIElementCreateApplication(target.pid)
             AXUIElementSetMessagingTimeout(application, 0.025)
             _ = AXUIElementSetAttributeValue(application, kAXFocusedWindowAttribute as CFString, window.element)
         }
-        guard ticket.valid else { return false }
-        if let window { _ = AXUIElementPerformAction(window.element, kAXRaiseAction as CFString) }
+        guard ticket.valid else { return .init() }
+        if let window {
+            let result = AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+            if revealed { revealLog.notice("raise result=\(result.rawValue)") }
+        }
         // Return codes only mean the request was sent; readback confirms actual focus.
-        return ticket.valid
+        return FocusDispatch(sent: ticket.valid, expectedWindow: revealed ? window?.id : nil)
     }
 
     static func observe(pid: Int32, ticket: FocusTicket) -> FocusObservation {
@@ -136,6 +155,16 @@ private enum FocusActions {
     }
 }
 
+private struct PendingReveal {
+    let target: SwitcherTargetID
+    let app: NSRunningApplication
+    let record: TrackedWindow?
+    let revision: UInt64
+    let ticket: FocusTicket
+    let native: Bool
+    let completion: (Bool) -> Void
+}
+
 /// One focus queue for all modes. Every action/readback belongs to an intent;
 /// opening another selection cancels remaining work from the preceding commit.
 @MainActor
@@ -145,9 +174,28 @@ final class FocusCoordinator {
     var onConfirmed: ((SwitcherTargetID, SwitcherTargetID?) -> Void)?
     private var policy = FocusIntentPolicy()
     private var ticket: FocusTicket?
+    private var revealGate = ApplicationRevealGate()
+    private var pendingReveal: PendingReveal?
+    private var revealObserver: NSObjectProtocol?
+    private var tracingReveal = false
+
+    init() {
+        revealObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didUnhideApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            MainActor.assumeIsolated { self?.acknowledgeUnhide(app.processIdentifier) }
+        }
+    }
+
+    deinit {
+        if let revealObserver { NSWorkspace.shared.notificationCenter.removeObserver(revealObserver) }
+    }
     private let queue = DispatchQueue(label: "local.lucas.VisibleTab.focus", qos: .userInteractive)
 
     func beginSelection() -> SwitcherTargetID? {
+        if tracingReveal { revealLog.notice("cancel new-selection revision=\(self.policy.revision)") }
+        clearReveal()
         ticket?.cancel()
         ticket = nil
         let origin = policy.beginSelection(now: ProcessInfo.processInfo.systemUptime)
@@ -155,7 +203,9 @@ final class FocusCoordinator {
         return origin
     }
 
-    func cancel() {
+    func cancel(reason: String = "selection-cancelled") {
+        if tracingReveal { revealLog.notice("cancel \(reason, privacy: .public) revision=\(self.policy.revision)") }
+        clearReveal()
         ticket?.cancel()
         ticket = nil
         policy.cancel()
@@ -178,34 +228,92 @@ final class FocusCoordinator {
             // This deadline only clears bookkeeping; it never retries focus.
             self?.complete(revision, ticket: ticket, observed: nil, target: target, completion: completion)
         }
-        let native = Self.nativeAvailable
-        let accepted = ApplicationSwitch.commit(revealHidden: revealHidden, isHidden: app.isHidden,
+        clearReveal()
+        let wasHidden = app.isHidden
+        tracingReveal = revealHidden && wasHidden
+        let request = PendingReveal(target: target, app: app, record: record, revision: revision,
+                                    ticket: ticket, native: Self.nativeAvailable, completion: completion)
+        if tracingReveal {
+            // Register before sending the request, so even an immediate acknowledgement
+            // cannot be missed. No focus action is allowed while this gate is closed.
+            revealLog.notice("request pid=\(target.pid) revision=\(revision)")
+            revealGate.wait(for: target.pid)
+            pendingReveal = request
+        }
+        let accepted = ApplicationSwitch.commit(revealHidden: revealHidden, isHidden: wasHidden,
                                                isTerminated: app.isTerminated, unhide: { app.unhide() },
-                                               activate: {
-            native || app.activate(options: target == .application(target.pid) ? [.activateAllWindows] : [])
-        })
-        guard accepted else { complete(revision, ticket: ticket, observed: nil, target: target, completion: completion); return }
+                                               activate: { true })
+        guard accepted else {
+            complete(revision, ticket: ticket, observed: nil, target: target, completion: completion)
+            return
+        }
+        if tracingReveal {
+            // Cocoa refreshes isHidden on a later main-run-loop turn. This fast path
+            // covers an app already revealed externally or a missing notification;
+            // unlike the old code, it never reads the stale bit in the unhide turn.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.policy.isCurrent(revision), ticket.valid, !app.isHidden else { return }
+                self.acknowledgeUnhide(target.pid)
+            }
+        } else { enqueue(request, revealed: false) }
+    }
+
+    private func acknowledgeUnhide(_ pid: Int32) {
+        guard let request = pendingReveal, request.ticket.valid,
+              policy.isCurrent(request.revision), revealGate.acknowledge(pid) else { return }
+        pendingReveal = nil
+        revealLog.notice("acknowledged pid=\(pid) revision=\(request.revision)")
+        // Let the current notification finish before asking the app for its now-live
+        // window. This is a run-loop handoff, not an arbitrary display/focus delay.
+        DispatchQueue.main.async { [weak self] in self?.enqueue(request, revealed: true) }
+    }
+
+    private func enqueue(_ request: PendingReveal, revealed: Bool) {
+        let target = request.target, ticket = request.ticket, revision = request.revision
+        guard policy.isCurrent(revision), ticket.valid, !request.app.isTerminated else { return }
+        if !request.native {
+            let activated = request.app.activate(options: target == .application(target.pid) ? [.activateAllWindows] : [])
+            guard activated else {
+                complete(revision, ticket: ticket, observed: nil, target: target, completion: request.completion)
+                return
+            }
+        }
         queue.async { [weak self] in
             guard ticket.valid else { return }
-            let sent = FocusActions.perform(target: target, record: record, native: native, ticket: ticket)
+            let result = FocusActions.perform(target: target, record: request.record, native: request.native,
+                                              revealed: revealed, ticket: ticket)
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.policy.isCurrent(revision), ticket.valid else { return }
-                if sent { self.confirm(target, revision: revision, ticket: ticket, attempt: 0, completion: completion) }
-                else { self.complete(revision, ticket: ticket, observed: nil, target: target, completion: completion) }
+                if result.sent {
+                    self.confirm(target, expectedWindow: result.expectedWindow, revision: revision,
+                                 ticket: ticket, attempt: 0, completion: request.completion)
+                } else {
+                    self.complete(revision, ticket: ticket, observed: nil, target: target, completion: request.completion)
+                }
             }
         }
     }
 
-    private func confirm(_ target: SwitcherTargetID, revision: UInt64, ticket: FocusTicket, attempt: Int,
+    private func clearReveal() {
+        revealGate.cancel()
+        pendingReveal = nil
+        tracingReveal = false
+    }
+
+    private func confirm(_ target: SwitcherTargetID, expectedWindow: SwitcherTargetID?, revision: UInt64, ticket: FocusTicket, attempt: Int,
                          completion: @escaping (Bool) -> Void) {
         guard policy.isCurrent(revision), ticket.valid else { return }
         queue.async { [weak self] in
             let observation = FocusActions.observe(pid: target.pid, ticket: ticket)
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.policy.isCurrent(revision), ticket.valid else { return }
-                let appFocused = observation.appPID == target.pid &&
-                    NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid
-                let matches = appFocused && (target == .application(target.pid) || observation.window == target)
+                let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+                let matches = FocusConfirmation.matches(target: target, expectedWindow: expectedWindow,
+                                                        frontmostPID: frontPID, keyboardPID: observation.appPID,
+                                                        window: observation.window)
+                if self.tracingReveal && attempt == 0 {
+                    revealLog.notice("readback front=\(frontPID ?? -1) keyboard=\(observation.appPID ?? -1) window=\(String(describing: observation.window), privacy: .public) matches=\(matches)")
+                }
                 if matches {
                     self.complete(revision, ticket: ticket, observed: observation.window, target: target,
                                   success: true, completion: completion)
@@ -215,7 +323,7 @@ final class FocusCoordinator {
                     let delays = [0.02, 0.04, 0.08, 0.16, 0.24]
                     if attempt < delays.count {
                         DispatchQueue.main.asyncAfter(deadline: .now() + delays[attempt]) { [weak self] in
-                            self?.confirm(target, revision: revision, ticket: ticket, attempt: attempt + 1, completion: completion)
+                            self?.confirm(target, expectedWindow: expectedWindow, revision: revision, ticket: ticket, attempt: attempt + 1, completion: completion)
                         }
                     } else {
                         self.complete(revision, ticket: ticket, observed: nil, target: target, completion: completion)
@@ -228,6 +336,8 @@ final class FocusCoordinator {
     private func complete(_ revision: UInt64, ticket: FocusTicket, observed: SwitcherTargetID?, target: SwitcherTargetID,
                           success: Bool = false, completion: (Bool) -> Void) {
         guard self.ticket === ticket, policy.complete(revision, observed: success) else { return }
+        if tracingReveal { revealLog.notice("complete revision=\(revision) success=\(success)") }
+        clearReveal()
         ticket.cancel()
         self.ticket = nil
         if success { onConfirmed?(target, observed) }

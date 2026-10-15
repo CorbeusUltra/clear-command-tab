@@ -299,7 +299,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
             let top = NSScreen.screens.first?.frame.maxY ?? 0
             let point = NSPoint(x: event.location.x, y: top - event.location.y)
             if NSScreen.screens.contains(where: { $0.frame.contains(point) }) {
-                if sessionMode == nil { focus.cancel() }
+                if sessionMode == nil { focus.cancel(reason: "mouse-down") }
                 else if !panel.containsQuartzPoint(event.location) { cancelSelection() }
             }
             return false
@@ -321,7 +321,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate 
             ownership.consumeDown(key)
             return true
         }
-        guard let mode = sessionMode else { focus.cancel(); return false }
+        guard let mode = sessionMode else { focus.cancel(reason: "keyboard-input"); return false }
         guard mode.permits(flags), mode.isHeld(by: flags) else { cancelSelection(); return false }
         var handled = true
         switch Int(key) {
