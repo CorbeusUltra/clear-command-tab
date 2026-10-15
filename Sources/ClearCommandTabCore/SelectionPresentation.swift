@@ -1,12 +1,12 @@
 import Foundation
 
 /// Keep a quick MRU flip invisible. Further navigation is deliberate cycling and
-/// reveals the panel immediately; window mode retains its immediate presentation.
+/// reveals the panel immediately. The same delay applies to all three modes.
 public struct SelectionPresentation: Sendable {
     private var deadline: TimeInterval?
     public init() {}
-    public mutating func begin(mode: SwitcherMode, now: TimeInterval) {
-        deadline = mode == .windows ? now : now + 0.150
+    public mutating func begin(mode _: SwitcherMode, now: TimeInterval) {
+        deadline = now + 0.150
     }
     public mutating func navigate(now: TimeInterval) {
         if deadline != nil { deadline = now }

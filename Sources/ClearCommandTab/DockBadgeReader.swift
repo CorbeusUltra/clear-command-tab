@@ -1,6 +1,6 @@
 import AppKit
 import ApplicationServices
-import VisibleTabCore
+import ClearCommandTabCore
 
 /// Dock accessibility exposes the badge the user actually sees, including symbols.
 /// All IPC stays off the keyboard callback and the main thread. No idle polling.

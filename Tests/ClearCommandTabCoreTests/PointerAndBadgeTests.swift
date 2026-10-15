@@ -1,6 +1,6 @@
 import Foundation
 import CoreGraphics
-import VisibleTabCore
+import ClearCommandTabCore
 
 struct PointerAndBadgeTests {
     func testStationaryPointerAndRealMovement() {

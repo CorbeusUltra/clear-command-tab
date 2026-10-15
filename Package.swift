@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "VisibleTab",
+    name: "ClearCommandTab",
     platforms: [.macOS(.v14)],
-    products: [.executable(name: "VisibleTab", targets: ["VisibleTab"])],
+    products: [.executable(name: "ClearCommandTab", targets: ["ClearCommandTab"])],
     targets: [
-        .target(name: "VisibleTabCore"),
-        .executableTarget(name: "VisibleTab", dependencies: ["VisibleTabCore"]),
-        .executableTarget(name: "VisibleTabChecks", dependencies: ["VisibleTabCore"], path: "Tests/VisibleTabCoreTests"),
-        .executableTarget(name: "VisibleTabFixture", path: "Tests/VisibleTabFixture"),
+        .target(name: "ClearCommandTabCore"),
+        .executableTarget(name: "ClearCommandTab", dependencies: ["ClearCommandTabCore"]),
+        .executableTarget(name: "ClearCommandTabChecks", dependencies: ["ClearCommandTabCore"], path: "Tests/ClearCommandTabCoreTests"),
+        .executableTarget(name: "ClearCommandTabFixture", path: "Tests/ClearCommandTabFixture"),
     ],
     swiftLanguageModes: [.v5]
 )

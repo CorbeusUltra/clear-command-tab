@@ -1,5 +1,5 @@
 import AppKit
-import VisibleTabCore
+import ClearCommandTabCore
 
 struct ApplicationPresentation {
     let name: String

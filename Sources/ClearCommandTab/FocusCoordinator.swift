@@ -2,7 +2,7 @@ import AppKit
 import Carbon
 import Darwin
 import os
-import VisibleTabCore
+import ClearCommandTabCore
 
 private let revealLog = Logger(subsystem: "local.lucas.VisibleTab", category: "RevealFocus")
 private let focusLog = Logger(subsystem: "local.lucas.VisibleTab", category: "Focus")

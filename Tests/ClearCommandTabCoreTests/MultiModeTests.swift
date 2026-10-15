@@ -1,5 +1,5 @@
 import Foundation
-import VisibleTabCore
+import ClearCommandTabCore
 
 final class MultiModeTests {
     func testGroupingByAppThenWindowRecency() {

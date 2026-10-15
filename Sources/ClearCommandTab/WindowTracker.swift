@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 import Darwin
-import VisibleTabCore
+import ClearCommandTabCore
 
 struct WindowApplication: Sendable {
     let pid: Int32

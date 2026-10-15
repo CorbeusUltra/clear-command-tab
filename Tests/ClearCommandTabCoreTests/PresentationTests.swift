@@ -1,5 +1,5 @@
 import Foundation
-import VisibleTabCore
+import ClearCommandTabCore
 
 final class PresentationTests {
     func testQuickMRUCommitNeverRevealsPanel() {
@@ -21,8 +21,8 @@ final class PresentationTests {
         expectFalse(presentation.permitsDisplay(now: 11))
     }
 
-    func testHeldApplicationChordsRevealAt150Milliseconds() {
-        for mode in [SwitcherMode.applications, .hiddenApplications] {
+    func testHeldChordsRevealAt150Milliseconds() {
+        for mode in [SwitcherMode.applications, .hiddenApplications, .windows] {
             var presentation = SelectionPresentation()
             presentation.begin(mode: mode, now: 10)
             expectFalse(presentation.permitsDisplay(now: 10))
@@ -33,14 +33,35 @@ final class PresentationTests {
     }
 
     func testFurtherNavigationShowsImmediately() {
+        for mode in [SwitcherMode.applications, .hiddenApplications, .windows] {
+            var presentation = SelectionPresentation()
+            presentation.begin(mode: mode, now: 10)
+            presentation.navigate(now: 10.020)
+            expectTrue(presentation.permitsDisplay(now: 10.020))
+            expectEqual(presentation.delayRemaining(now: 10.020), 0)
+            presentation.cancel()
+            presentation.navigate(now: 10.030)
+            expectFalse(presentation.permitsDisplay(now: 10.030))
+        }
+    }
+
+    func testQuickWindowCommitNeverRevealsPanel() {
+        let first = SwitcherTargetID.window(pid: 1, number: 101)
+        let second = SwitcherTargetID.window(pid: 1, number: 102)
+        var history = WindowHistory()
+        history.update(frontToBack: [first, second])
+        let session = SelectionSession(ids: history.groupedOrder, currentID: first)
         var presentation = SelectionPresentation()
-        presentation.begin(mode: .applications, now: 10)
-        presentation.navigate(now: 10.020)
-        expectTrue(presentation.permitsDisplay(now: 10.020))
-        expectEqual(presentation.delayRemaining(now: 10.020), 0)
+        presentation.begin(mode: .windows, now: 10)
+        expectEqual(session.selectedID, second)
+        // A discovery callback before the deadline cannot reveal the window panel.
+        expectFalse(presentation.permitsDisplay(now: 10.050))
+        expectFalse(presentation.permitsDisplay(now: 10.149))
         presentation.cancel()
-        presentation.navigate(now: 10.030)
-        expectFalse(presentation.permitsDisplay(now: 10.030))
+        history.activate(session.selectedID)
+        expectEqual(history.order.first, second)
+        expectFalse(presentation.permitsDisplay(now: 10.150))
+        expectFalse(presentation.permitsDisplay(now: 11))
     }
 
     func testRestartedGestureDoesNotUseOldDisplayDeadline() {
@@ -52,8 +73,9 @@ final class PresentationTests {
         expectTrue(presentation.permitsDisplay(now: 10.250))
         presentation.cancel()
         presentation.begin(mode: .windows, now: 11)
-        expectTrue(presentation.permitsDisplay(now: 11))
-        expectEqual(presentation.delayRemaining(now: 11), 0)
+        expectFalse(presentation.permitsDisplay(now: 11))
+        expectFalse(presentation.permitsDisplay(now: 11.1499))
+        expectTrue(presentation.permitsDisplay(now: 11.150))
     }
 
     func testUnverifiedFocusDoesNotSoundLikeRejectedAction() {

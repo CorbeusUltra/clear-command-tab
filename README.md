@@ -1,4 +1,6 @@
-# VisibleTab
+# ClearCommandTab
+
+Formerly **VisibleTab**. The technical bundle identifier remains `local.lucas.VisibleTab` to preserve existing preferences and signing identity during the rename.
 
 A small native macOS switcher with three modes. **Command-Tab** excludes only applications hidden with Hide / Command-H, preserving minimized, windowless, and other-Space apps. **Command-Option-Tab** reveals a selected hidden app. **Option-Tab** switches between non-minimized windows of visible apps on the current Space, with an icon and title for each window.
 
@@ -7,24 +9,28 @@ A small native macOS switcher with three modes. **Command-Tab** excludes only ap
 Requires macOS 14 or later and Swift 6 tools (Xcode or Command Line Tools). There are no third-party dependencies.
 
 ```sh
-cd /Users/lucas/Documents/code/all/visible-tab
-swift run VisibleTabChecks
+cd /Users/lucas/Documents/code/all/clear-command-tab
+swift run ClearCommandTabChecks
 zsh scripts/install-app.sh
-open /Users/lucas/Applications/VisibleTab.app
+open /Users/lucas/Applications/ClearCommandTab.app
 ```
 
-The installer refuses to replace a running instance. An existing installation is moved to the macOS Trash before replacement. The app is signed with the existing local Apple Development certificate through `scripts/sign-app.sh`. The certificate, bundle identifier, and installed path are kept stable across updates; the installer never silently falls back to ad hoc signing. The migration from the earlier ad hoc identity requires one renewed Accessibility grant. Subsequent builds should retain that grant as long as their designated requirement remains compatible. This is a local development app, not a notarized distribution build.
+The installer refuses to replace a running instance. An existing installation (including the former `VisibleTab.app`) is moved to the macOS Trash before replacement. The app is signed with the existing local Apple Development certificate through `scripts/sign-app.sh`. The certificate and bundle identifier are kept stable across updates; the installer never silently falls back to ad hoc signing. The migration from the earlier ad hoc identity requires one renewed Accessibility grant. Subsequent builds should retain that grant as long as their designated requirement remains compatible. This is a local development app, not a notarized distribution build.
 
 ## First launch
 
 1. Quit other switchers that capture Command-Tab (such as AltTab).
-2. Open VisibleTab. Click **Grant Accessibility…** and enable VisibleTab in **System Settings → Privacy & Security → Accessibility**. If macOS asks to authenticate, complete that step yourself.
-3. Return to VisibleTab and click **Check permission**. The status should read **Ready**.
+2. Open ClearCommandTab. Click **Grant Accessibility…** and enable ClearCommandTab in **System Settings → Privacy & Security → Accessibility**. If macOS asks to authenticate, complete that step yourself.
+3. Return to ClearCommandTab and click **Check permission**. The status should read **Ready**.
 4. Close the settings window and use Command-Tab.
 
-No Screen Recording permission is needed: VisibleTab uses app icons and window bounds, not screenshots or window contents. It does not access the network or record typed text.
+No Screen Recording permission is needed: ClearCommandTab uses app icons and window bounds, not screenshots or window contents. It does not access the network or record typed text.
 
-On macOS 27, the permission page is named **Device Control and Data Access** under **Privacy & Security**; the app's permission button opens it directly. When migrating from an old ad hoc build to the stable signed identity, an enabled switch can still reference the old binary signature. If toggling it and restarting do not restore **Ready**, select only VisibleTab in that list, remove its permission entry, then use **Add** to select `/Users/lucas/Applications/VisibleTab.app` and enable the current app. This removes a permission record, not the app or its files.
+On macOS 27, the permission page is named **Device Control and Data Access** under **Privacy & Security**; the app's permission button opens it directly. When migrating from an old ad hoc build to the stable signed identity, an enabled switch can still reference the old binary signature. If toggling it and restarting do not restore **Ready**, select only ClearCommandTab in that list, remove its permission entry, then use **Add** to select `/Users/lucas/Applications/ClearCommandTab.app` and enable the current app. This removes a permission record, not the app or its files.
+
+## Settings window
+
+The native toolbar has three tabs: **Settings** for glass, startup, menu-bar visibility and permissions; **Guide** for the three shortcuts and quick-switch behavior; **About** for the app icon, version/build and credits. The glass labels are **fully transparent** (previously Current) and **original** (previously AltTab). Only their names changed; existing selections and rendering are preserved.
 
 ## Controls
 
@@ -35,7 +41,7 @@ On macOS 27, the permission page is named **Device Control and Data Access** und
 | Quick Command-Tab | Switch to the previously active visible app |
 | Command-Option-Tab | Cycle hidden apps; release Command to reveal the selection |
 | Option-Tab | Cycle grouped current-Space windows; release Option to focus the selection |
-| Hold Command, then Tab | Display the panel after 150 ms; a quick release switches immediately without showing it |
+| Hold Command or Option, then Tab | Display the panel after 150 ms; a quick release switches immediately without showing it |
 | Shift-Tab | Move backward |
 | Left / Right arrow | Move backward / forward |
 | Release Command | Activate the selected app |
@@ -48,22 +54,24 @@ Selection wraps at both ends and remains in the mode selected by the opening cho
 
 Window mode includes covered windows on the current Space across connected screens. It excludes hidden apps, minimized windows, windowless placeholders, inactive tabs, and utility panels. App and window MRU are separate. Window groups follow app MRU; each group keeps its own window MRU. Newly discovered windows join their app group without changing the current selection. A first run uses front-to-back window order until focus changes are observed. Window discovery runs asynchronously. Normal switching uses already-known destinations and does not request a new full scan. At startup or after a Space change, hold Option while the initial window snapshot is gathered. Releasing it before any destinations are ready cancels immediately, rather than activating a window later. Cold discovery is bounded to 900 ms. Unsupported or unresponsive Accessibility windows may be omitted. Focus uses an optional native front-process/key-window bridge followed by Accessibility Raise. Actual foreground and keyboard focus are read back before updating MRU; an accepted API request alone does not count as success. If the bridge is missing, public app activation and AX attributes remain a fallback with weaker focus guarantees.
 
+All three modes use the same 150 ms presentation delay. Releasing the held modifier switches immediately without displaying the panel; further Tab/arrow navigation displays it immediately.
+
 A stationary pointer does not select an icon when the panel opens beneath it. Pointer selection starts after actual movement of at least one logical point; clicks remain immediate.
 
-The right-click menu provides **Settings…** (Command-,) and **Quit VisibleTab** (Command-Q), with a disabled status label. These key equivalents act on VisibleTab while its menu is open. The icon stays highlighted until the menu closes. There is no redundant Pause / Resume menu action. A left click toggles Pause / Resume. The same menu-bar arrow symbol is dimmed while paused, instead of being replaced by a pause glyph. Pause or Quit returns keyboard shortcuts to macOS and the foreground app; the menu stays accessible while paused. Pause remains temporary, as in earlier versions. **Show menu bar icon** can be disabled; reopen VisibleTab from Applications or Spotlight to reach the settings again. Reopening does not start another instance.
+The right-click menu provides **Settings…** (Command-,) and **Quit ClearCommandTab** (Command-Q), with a disabled status label. These key equivalents act on ClearCommandTab while its menu is open. The icon stays highlighted until the menu closes. There is no redundant Pause / Resume menu action. A left click toggles Pause / Resume. The same menu-bar arrow symbol is dimmed while paused, instead of being replaced by a pause glyph. Pause or Quit returns keyboard shortcuts to macOS and the foreground app; the menu stays accessible while paused. Pause remains temporary, as in earlier versions. **Show menu bar icon** can be disabled; reopen ClearCommandTab from Applications or Spotlight to reach the settings again. Reopening does not start another instance.
 
 **Launch at login** is off initially. It uses macOS Service Management and can require approval in **System Settings → General → Login Items & Extensions**.
 
-AltTab's existing preferences are preserved, including its own launch-at-login setting. Before enabling VisibleTab at login, disable AltTab's automatic launch or ensure it uses a different shortcut.
+AltTab's existing preferences are preserved, including its own launch-at-login setting. Before enabling ClearCommandTab at login, disable AltTab's automatic launch or ensure it uses a different shortcut.
 
 ## Design and limits
 
 - Swift and AppKit, with a testable model separate from the UI and keyboard integration.
 - Application state follows NSWorkspace notifications. Window state follows Accessibility notifications and Space changes, with coalesced reads on a discovery queue, per-element timeouts, and a bounded discovery pass. All three modes share a serial user-interactive focus queue, so actions never wait behind a full discovery scan. A new selection cancels outstanding actions and confirmation for an older commit. Confirmation reads are bounded to 800 ms and never retry activation; physical input, unrelated activation, pause, or a Space/session change cancels pending work. WindowServer metadata reads stay outside the UI and global keyboard callback. No periodic window polling or screenshots are used. A 100 ms watchdog exists only during a held selection to dismiss a stale panel if Secure Input prevents the modifier release from reaching the event tap.
-- MRU order is observed by VisibleTab and remembered by app identity between launches. It cannot read Apple's private switching history. The first launch places the foreground app first, followed by alphabetical app names.
+- MRU order is observed by ClearCommandTab and remembered by app identity between launches. It cannot read Apple's private switching history. The first launch places the foreground app first, followed by alphabetical app names.
 - The panel is nonactivating, so the foreground application remains unchanged while selecting. It temporarily becomes the key window to keep native clear glass in its active appearance; dismissal releases that keyboard focus before activating the selected app. Selecting an app activates all its windows, without reopening documents or restoring minimized windows.
 - Secure Input can temporarily restore the native switcher. Missing Accessibility permission or an event-tap failure also leaves the native switcher available.
-- On macOS 26 and later, **Settings → Glass → Current** uses the previous public `NSGlassEffectView` `.clear` style. **AltTab**, the initial profile for this update, applies the optional internal `set_variant:` value 3 to that same clear material, inspired by [AltTab's material implementation](https://github.com/lwouis/alt-tab-macos/blob/master/src/switcher/main-window/TilesPanelBackgroundView.swift). The method and its signature are checked before use; unavailable profiles fall back to Current. Switching back to Current constructs a fresh public view, without guessing a private reset value. Content, key-window handling, badges, and selection material are shared. An exact native visual match is not claimed. macOS 14–15 retains the older material; system appearance settings are never changed.
+- On macOS 26 and later, **Settings → Glass effect → fully transparent** uses the previous public `NSGlassEffectView` `.clear` style. **original**, the initial profile, applies the optional internal `set_variant:` value 3 to that same clear material, inspired by [AltTab's material implementation](https://github.com/lwouis/alt-tab-macos/blob/master/src/switcher/main-window/TilesPanelBackgroundView.swift). The method and its signature are checked before use; unavailable profiles fall back to fully transparent. Switching back to fully transparent constructs a fresh public view, without guessing a private reset value. Content, key-window handling, badges, and selection material are shared. An exact native visual match is not claimed. macOS 14–15 retains the older material; system appearance settings are never changed.
 - The optional `_AXUIElementGetWindow` bridge identifies windows so they can be matched to the public on-screen WindowServer list. It is resolved at runtime and used only for identity, with no injection or system changes. If unavailable, Option-Tab is disabled with an explanation; both app modes remain functional.
 - Application icons are rasterized from the actual running app's icon. They load on a background queue at discovery, refresh individually on activation (throttled to five seconds), and receive four bounded launch retries to avoid keeping an early placeholder indefinitely. Panel opening uses the cached bitmap without any icon query or decoding. Icon resolution runs outside both the global keyboard callback and the UI thread. App names, bundle identities, Dock PID, and screen placement are also cached for the switching path. The original optical margins are retained. Matplotlib's reported white-icon issue still needs a reproduction from VS Code to establish whether the source icon itself is wrong or the previous cache/rendering was responsible.
 - App badges come from the Dock's accessibility status labels and match apps by bundle identity. They refresh asynchronously once per second only while switching, using the existing Accessibility permission. Apps without an exposed Dock badge have no badge; notification contents are never read.
@@ -77,10 +85,10 @@ The glass profile, settings, and a bounded app-order history are stored in the `
 ## Development checks
 
 ```sh
-swift run VisibleTabChecks
+swift run ClearCommandTabChecks
 zsh scripts/build-app.sh
-.build/VisibleTab.app/Contents/MacOS/VisibleTab --diagnostics
-open .build/VisibleTab.app --args --preview
+.build/ClearCommandTab.app/Contents/MacOS/ClearCommandTab --diagnostics
+open .build/ClearCommandTab.app --args --preview
 ```
 
 `--diagnostics` prints a local JSON snapshot of running applications, executable/bundle paths, raster-icon sizes and hashes, Dock badges, optional bridge availability, and Accessibility trust, then exits. Icon hashes describe app artwork only; no screenshots or window content are read. `--preview` displays the panel without intercepting shortcuts or activating apps and **automatically quits after six seconds**. `--preview-count=3`, `--preview-light`, and `--preview-dark` provide visual QA cases; `--preview-duration=N` sets a lifetime between 2 and 30 seconds. Neither mode is required for everyday use.
@@ -93,7 +101,7 @@ Native effect reference: [Apple's NSGlassEffectView documentation](https://devel
 
 See [VALIDATION.md](VALIDATION.md) for checks performed on the target Mac and remaining manual scenarios.
 
-`swift run VisibleTabChecks` uses an executable test runner because this Mac's Command Line Tools do not contain XCTest. To build two disposable document-free apps for integration tests, run `zsh scripts/build-fixtures.sh`; the bundles are created under `.build/Fixtures/`.
+`swift run ClearCommandTabChecks` uses an executable test runner because this Mac's Command Line Tools do not contain XCTest. To build two disposable document-free apps for integration tests, run `zsh scripts/build-fixtures.sh`; the bundles are created under `.build/Fixtures/`.
 
 ## Version 0.4.0 rollback and validation handoff
 
@@ -150,3 +158,11 @@ Ordinary and hidden-app panels wait 150 ms before first display. Releasing the o
 The menu behavior was compared with [KeepingYouAwake's status item controller](https://github.com/newmarcel/KeepingYouAwake/blob/main/Packages/KYAStatusItemUI/Sources/KYAStatusItemUI/KYAStatusItemController.m) and [menu definitions](https://github.com/newmarcel/KeepingYouAwake/blob/main/KeepingYouAwake/KYAMainMenu/KYAMainMenu.m). VisibleTab uses the modern status-item `menu` property rather than KeepingYouAwake's deprecated popup API. It associates the menu only while open, restores left-click toggling on close, keeps the icon highlighted during tracking, removes the Pause / Resume row, and assigns Command-, and Command-Q to explicit VisibleTab targets. Keyboard interception passes through while its menu is tracking. The settings window's separate Pause control remains useful when the icon is hidden.
 
 The certificate-based signer, bundle identifier, and install path remain unchanged. Permission should persist across this update; the actual installed app's Ready state is still the runtime check. Startup/permission status changes emit a concise Lifecycle log for that check without relying on terminal trust. The approved glass and panel rendering files are unchanged. Pre-update source and app are backed up at `/Users/lucas/Documents/code/all/visible-tab-backups/20261015-222956-before-0.4.5/`.
+
+## Version 0.4.6: ClearCommandTab, quick window switching, and settings tabs
+
+The project folder is now `/Users/lucas/Documents/code/all/clear-command-tab`, and the app is `/Users/lucas/Applications/ClearCommandTab.app`. Build products, source modules, menu labels and development commands use ClearCommandTab. Historical backup paths and release notes retain the names used when those snapshots were created. The legacy bundle identifier, preference domain, notification names and certificate-based signing identity are intentionally preserved.
+
+Option-Tab now uses the same 150 ms presentation gate as both app modes. A quick release still commits immediately; further navigation displays immediately. Window ordering and focus paths are unchanged.
+
+Settings uses native toolbar tabs (Settings, Guide, About), following the structure of [KeepingYouAwake's settings window](https://github.com/newmarcel/KeepingYouAwake/blob/main/KeepingYouAwake/Settings/KYASettingsWindow/KYASettingsWindow.m). About reads its version/build from the bundle. The glass choices are renamed fully transparent / original without changing the stored current / altTab values or either effect.

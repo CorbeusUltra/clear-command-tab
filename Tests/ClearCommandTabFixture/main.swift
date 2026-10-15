@@ -5,7 +5,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "VisibleTab Test"
+        let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "ClearCommandTab Test"
         let menu = NSMenu()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Hide \(name)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")

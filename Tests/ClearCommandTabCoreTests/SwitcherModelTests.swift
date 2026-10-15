@@ -1,5 +1,5 @@
 import Foundation
-import VisibleTabCore
+import ClearCommandTabCore
 
 final class SwitcherModelTests {
     func app(_ id: Int32, _ name: String, hidden: Bool = false, regular: Bool = true) -> ApplicationRecord {

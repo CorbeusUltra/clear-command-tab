@@ -1,5 +1,5 @@
 import Foundation
-import VisibleTabCore
+import ClearCommandTabCore
 
 final class FocusIntentTests {
     private let a = SwitcherTargetID.window(pid: 1, number: 10)

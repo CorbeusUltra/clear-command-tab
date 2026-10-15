@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key><string>local.lucas.VisibleTab</string>
-    <key>CFBundleName</key><string>VisibleTab</string>
-    <key>CFBundleDisplayName</key><string>VisibleTab</string>
-    <key>CFBundleExecutable</key><string>VisibleTab</string>
-    <key>CFBundleIconFile</key><string>VisibleTab.icns</string>
+    <key>CFBundleName</key><string>ClearCommandTab</string>
+    <key>CFBundleDisplayName</key><string>ClearCommandTab</string>
+    <key>CFBundleExecutable</key><string>ClearCommandTab</string>
+    <key>CFBundleIconFile</key><string>ClearCommandTab.icns</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.4.5</string>
-    <key>CFBundleVersion</key><string>13</string>
+    <key>CFBundleShortVersionString</key><string>0.4.6</string>
+    <key>CFBundleVersion</key><string>14</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>

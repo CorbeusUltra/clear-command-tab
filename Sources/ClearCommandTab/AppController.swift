@@ -1,7 +1,7 @@
 import AppKit
 import Carbon
 import os
-import VisibleTabCore
+import ClearCommandTabCore
 
 @MainActor
 final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate, NSMenuDelegate {
@@ -214,7 +214,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         let visible = UserDefaults.standard.bool(forKey: "showMenuBarIcon")
         if visible && statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-            let image = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: "VisibleTab")
+            let image = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: "ClearCommandTab")
             image?.isTemplate = true
             item.button?.image = image
             let menu = NSMenu()
@@ -228,7 +228,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             preferences.keyEquivalentModifierMask = .command
             menu.addItem(preferences)
             menu.addItem(.separator())
-            let quit = NSMenuItem(title: preview ? "Quit Preview" : "Quit VisibleTab",
+            let quit = NSMenuItem(title: preview ? "Quit Preview" : "Quit ClearCommandTab",
                                   action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             quit.target = NSApp
             quit.keyEquivalentModifierMask = .command
@@ -243,9 +243,9 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             statusItem = nil
             statusMenu = nil
         }
-        statusItem?.button?.toolTip = "VisibleTab — \(status)\nClick to \(paused ? "resume" : "pause"); right-click for Settings and Quit."
+        statusItem?.button?.toolTip = "ClearCommandTab — \(status)\nClick to \(paused ? "resume" : "pause"); right-click for Settings and Quit."
         let symbol = (!paused && !preview && !keyboard.isRunning) ? "exclamationmark.circle" : "arrow.left.arrow.right"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: paused ? "VisibleTab paused" : "VisibleTab enabled")
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: paused ? "ClearCommandTab paused" : "ClearCommandTab enabled")
         image?.isTemplate = true
         statusItem?.button?.image = image
         statusItem?.button?.appearsDisabled = paused || (!preview && !keyboard.isRunning)

@@ -24,7 +24,8 @@ let focusChecks = FocusIntentTests()
 let presentationChecks = PresentationTests()
 let cases: [(String, () -> Void)] = [
     ("quick MRU commit never reveals the panel", presentationChecks.testQuickMRUCommitNeverRevealsPanel),
-    ("held application chords reveal at 150 ms", presentationChecks.testHeldApplicationChordsRevealAt150Milliseconds),
+    ("quick window commit never reveals the panel", presentationChecks.testQuickWindowCommitNeverRevealsPanel),
+    ("all three held chords reveal at 150 ms", presentationChecks.testHeldChordsRevealAt150Milliseconds),
     ("further navigation shows the panel immediately", presentationChecks.testFurtherNavigationShowsImmediately),
     ("new gesture cannot reuse an old display deadline", presentationChecks.testRestartedGestureDoesNotUseOldDisplayDeadline),
     ("unverified focus is not an audible rejection", presentationChecks.testUnverifiedFocusDoesNotSoundLikeRejectedAction),

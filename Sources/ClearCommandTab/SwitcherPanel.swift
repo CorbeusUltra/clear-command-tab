@@ -1,5 +1,5 @@
 import AppKit
-import VisibleTabCore
+import ClearCommandTabCore
 
 @MainActor
 struct SwitcherItem {
@@ -37,7 +37,7 @@ final class SwitcherPanel: NSPanel {
         surface = NSView()
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
-        title = "VisibleTab"
+        title = "ClearCommandTab"
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
@@ -79,7 +79,7 @@ final class SwitcherPanel: NSPanel {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.positionCaption() }
         }
-        setAccessibilityLabel("VisibleTab application switcher")
+        setAccessibilityLabel("ClearCommandTab application switcher")
     }
 
     func applyGlassProfile(_ profile: GlassProfile) {
