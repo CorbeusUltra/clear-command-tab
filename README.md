@@ -43,6 +43,14 @@ On macOS 27, the permission page is named **Device Control and Data Access** und
 
 The native toolbar has three tabs: **Settings** for glass, startup, menu-bar visibility and permissions; **Guide** for the three shortcuts and quick-switch behavior; **About** for the app icon, version/build and credits. The glass labels are **fully transparent** (previously Current) and **original** (previously AltTab). Only their names changed; existing selections and rendering are preserved.
 
+### Restore a missing menu bar icon
+
+On macOS 26 and later, check **System Settings → Menu Bar → Allow in the Menu Bar → ClearCommandTab**. This macOS switch is separate from the app's **Show menu bar icon** preference. Apple currently provides no public API for the app to read or override that permission. A checked in-app preference therefore cannot guarantee that macOS permits the icon. See [Apple's explanation](https://developer.apple.com/forums/thread/801489).
+
+Reopen ClearCommandTab from Spotlight or Applications, click **Menu Bar Settings…** in Settings to reach the system pane, enable the system switch, then enable **Show menu bar icon** in the app. For ordinary AppKit visibility changes, the checkbox follows the reported native state, and turning it on explicitly re-shows the existing status item. No Control Center preferences are edited behind the user's back.
+
+Command-Q also quits ClearCommandTab while its Settings, Guide or About tab is active. It is a window-local key equivalent and does not capture another app's Command-Q.
+
 ## Controls
 
 | Input | Action |
@@ -191,3 +199,9 @@ A read-only WindowServer snapshot during the reported 0.4.7 failure found the Cl
 Settings requests now wait for NSMenu.didEndTrackingNotification and the default application run-loop mode. menuDidClose only records that the menu closed; it no longer detaches the status menu or starts an action. A small session model retains a native Settings action delivered after the close callback too, and delivers a deferred command only once. After tracking completes, Settings is explicitly ordered in front of other apps through public AppKit APIs. Its key window is reaffirmed on applicationDidBecomeActive, without changing the switcher or its native focus bridge.
 
 Targeted local Settings logs distinguish deferred requests, completed tracking, window visibility/key state and app activation. They contain no typed text or document contents. Actual right-click/Command-, acceptance remains a manual test after installing this version.
+
+## Version 0.4.9: menu bar recovery guidance and Settings Command-Q
+
+The app retains one NSStatusItem when hiding its icon and explicitly sets its isVisible property when Show menu bar icon changes, instead of removing and recreating the item with the same autosaved hidden state. Native visibility is observed through KVO; updates read the current value on the main actor to avoid applying stale hide/show callbacks. These public AppKit observations do not expose macOS's separate per-app Menu Bar permission, so Settings explains that limit and provides a button to the system Menu Bar pane on macOS 26+.
+
+The Settings window handles Command-Q through its normal AppKit key-equivalent dispatch, covering all three tabs without another global keyboard shortcut. Existing switcher rendering, focus and menu shortcuts are unchanged.

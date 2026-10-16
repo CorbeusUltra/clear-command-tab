@@ -28,6 +28,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     private var sessionScreen: NSScreen?
     private var hiddenForeground: NSRunningApplication?
     private var statusItem: NSStatusItem?
+    private var statusItemVisibilityObservation: NSKeyValueObservation?
     private var statusMenu: NSMenu?
     private var statusMenuSession = StatusMenuSession()
     private var statusMenuOwnedKeys: Set<UInt16> = []
@@ -97,6 +98,9 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         settings.onShowIcon = { [weak self] visible in
             UserDefaults.standard.set(visible, forKey: "showMenuBarIcon")
             self?.updateControls()
+            // Re-show the existing item explicitly. Recreating an item can simply
+            // restore the same hidden state from AppKit's autosaved visibility.
+            self?.statusItem?.isVisible = visible
         }
         settings.onGlassProfile = { [weak self] profile in
             UserDefaults.standard.set(profile.rawValue, forKey: GlassProfile.preferenceKey)
@@ -162,6 +166,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        statusItemVisibilityObservation?.invalidate()
         keyboard.stop()
         windows.setEnabled(false)
         cancelSelection()
@@ -232,8 +237,10 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
 
     private func updateControls() {
         let visible = UserDefaults.standard.bool(forKey: "showMenuBarIcon")
-        if visible && statusItem == nil {
+        if statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            item.isVisible = visible
+            item.behavior.insert(.removalAllowed)
             let image = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: "ClearCommandTab")
             image?.isTemplate = true
             item.button?.image = image
@@ -260,11 +267,10 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             item.button?.action = #selector(statusItemClicked)
             item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
             statusItem = item
-        } else if !visible, let item = statusItem {
-            NotificationCenter.default.removeObserver(self, name: NSMenu.didEndTrackingNotification, object: statusMenu)
-            NSStatusBar.system.removeStatusItem(item)
-            statusItem = nil
-            statusMenu = nil
+            statusItemVisibilityObservation = item.observe(\.isVisible, options: [.new]) { [weak self] observed, _ in
+                let itemID = ObjectIdentifier(observed)
+                Task { @MainActor [weak self] in self?.statusItemVisibilityChanged(itemID) }
+            }
         }
         statusItem?.button?.toolTip = "ClearCommandTab — \(status)\nClick to \(paused ? "resume" : "pause"); right-click for Settings and Quit."
         let symbol = (!paused && !preview && !keyboard.isRunning) ? "exclamationmark.circle" : "arrow.left.arrow.right"
@@ -274,6 +280,17 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         statusItem?.button?.appearsDisabled = paused || (!preview && !keyboard.isRunning)
         statusMenu?.item(withTag: 1)?.title = paused ? "Paused" : keyboard.isRunning ? "Ready" : "Permission required"
         settings.update(status: status, paused: paused, iconVisible: visible, glassProfile: GlassProfile.selected)
+    }
+
+    private func statusItemVisibilityChanged(_ itemID: ObjectIdentifier) {
+        guard let item = statusItem, ObjectIdentifier(item) == itemID else { return }
+        // Read the current value on the main actor; queued observations from a
+        // rapid hide/show cannot restore a stale state. This cannot read macOS's
+        // separate per-app "Allow in the Menu Bar" permission.
+        let visible = item.isVisible
+        guard UserDefaults.standard.bool(forKey: "showMenuBarIcon") != visible else { return }
+        UserDefaults.standard.set(visible, forKey: "showMenuBarIcon")
+        updateControls()
     }
 
     @objc private func statusItemClicked() {

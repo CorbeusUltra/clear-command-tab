@@ -2,6 +2,21 @@ import AppKit
 import ServiceManagement
 
 @MainActor
+final class SettingsAppWindow: NSWindow {
+    var onQuit: () -> Void = { NSApp.terminate(nil) }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        if event.type == .keyDown, modifiers == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "q" {
+            onQuit()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
+@MainActor
 final class SettingsWindow: NSWindowController {
     var onShowIcon: ((Bool) -> Void)?
     var onTogglePause: (() -> Void)?
@@ -17,7 +32,7 @@ final class SettingsWindow: NSWindowController {
         let tabs = NSTabViewController()
         tabs.tabStyle = .toolbar
         tabs.transitionOptions = []
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 500),
+        let window = SettingsAppWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 500),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "ClearCommandTab Settings"
         window.isReleasedWhenClosed = false
@@ -95,8 +110,17 @@ final class SettingsWindow: NSWindowController {
         stack.addArrangedSubview(launchAtLogin)
         showIcon.target = self
         showIcon.action = #selector(iconChanged)
-        stack.addArrangedSubview(showIcon)
-        explanation("Click the menu bar icon to pause or resume; right-click to open its menu. If you hide the icon, reopen ClearCommandTab from Applications or Spotlight.", in: stack)
+        if #available(macOS 26.0, *) {
+            let visibilityRow = NSStackView()
+            visibilityRow.spacing = 12
+            visibilityRow.addArrangedSubview(showIcon)
+            visibilityRow.addArrangedSubview(NSButton(title: "Menu Bar Settings…", target: self, action: #selector(openMenuBarSettings)))
+            stack.addArrangedSubview(visibilityRow)
+            explanation("If the icon is missing, enable ClearCommandTab in System Settings → Menu Bar → Allow in the Menu Bar, then turn this option on. macOS controls that separate switch.", in: stack)
+        } else {
+            stack.addArrangedSubview(showIcon)
+            explanation("If you hide the icon, reopen ClearCommandTab from Applications or Spotlight and turn this option on.", in: stack)
+        }
 
         section("Status & permissions", in: stack)
         statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
@@ -155,7 +179,7 @@ final class SettingsWindow: NSWindowController {
         section("While choosing", in: stack)
         explanation("Hold Shift to move backward, use ← / →, or press Escape to cancel. Release Command for apps or Option for windows to confirm. Move the pointer to select an icon, or click to confirm.", in: stack)
         section("Menu shortcuts", in: stack)
-        explanation("Right-click the menu bar icon, then use ⌘, for Settings or ⌘Q to quit. A dimmed icon means switching is paused.", in: stack)
+        explanation("Right-click the menu bar icon, then use ⌘, for Settings or ⌘Q to quit. ⌘Q also quits while this settings window is active. A dimmed icon means switching is paused.", in: stack)
         return view
     }
 
@@ -211,6 +235,12 @@ final class SettingsWindow: NSWindowController {
     @objc private func iconChanged() { onShowIcon?(showIcon.state == .on) }
     @objc private func togglePause() { onTogglePause?() }
     @objc private func checkPermission() { onCheckPermission?() }
+
+    @objc private func openMenuBarSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.ControlCenter-Settings.extension") {
+            NSWorkspace.shared.open(url)
+        }
+    }
 
     @objc private func grantPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
