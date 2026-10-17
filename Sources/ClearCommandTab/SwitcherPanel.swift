@@ -8,6 +8,11 @@ struct SwitcherItem {
     let icon: CGImage?
     var badge: String? = nil
     var windowTitle: String? = nil
+
+    func hasSameContent(as other: Self) -> Bool {
+        id == other.id && name == other.name && icon === other.icon &&
+            badge == other.badge && windowTitle == other.windowTitle
+    }
 }
 
 @MainActor
@@ -18,7 +23,7 @@ final class SwitcherPanel: NSPanel {
     private let canvas = NSView()
     private let scroll = NSScrollView()
     private let row = NSView()
-    private let selectionHighlight = NSVisualEffectView()
+    private var selectionHighlight: NSView
     private let nameLabel = NSTextField(labelWithString: "")
     private var cells: [SwitcherTargetID: ApplicationCell] = [:]
     private var displayedIDs: [SwitcherTargetID] = []
@@ -35,6 +40,7 @@ final class SwitcherPanel: NSPanel {
 
     init() {
         surface = NSView()
+        selectionHighlight = GlassProfile.selected.makeSelection()
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         title = "ClearCommandTab"
@@ -60,11 +66,6 @@ final class SwitcherPanel: NSPanel {
         scroll.documentView = row
         // Let AppKit render a neutral selection material over the actual backdrop.
         // A separate sibling behind the icon avoids applying vibrancy to app artwork.
-        selectionHighlight.material = .selection
-        selectionHighlight.blendingMode = .withinWindow
-        selectionHighlight.state = .active
-        selectionHighlight.isEmphasized = false
-        selectionHighlight.wantsLayer = true
         selectionHighlight.layer?.masksToBounds = true
         selectionHighlight.isHidden = true
         row.addSubview(selectionHighlight)
@@ -89,17 +90,43 @@ final class SwitcherPanel: NSPanel {
         canvas.removeFromSuperview()
         surface = profile.makeSurface(content: canvas)
         contentView = surface
+        let previous = selectionHighlight
+        selectionHighlight = profile.makeSelection()
+        selectionHighlight.frame = previous.frame
+        selectionHighlight.isHidden = previous.isHidden
+        selectionHighlight.layer?.cornerRadius = previous.layer?.cornerRadius ?? 0
+        selectionHighlight.layer?.masksToBounds = true
+        row.replaceSubview(previous, with: selectionHighlight)
+        // A visible panel must retain its shape when changing materials.
+        if let layout {
+            if #available(macOS 26.0, *), let glass = surface as? NSGlassEffectView {
+                glass.cornerRadius = layout.cornerRadius
+            } else {
+                surface.layer?.cornerRadius = layout.cornerRadius
+                surface.layer?.masksToBounds = true
+            }
+        }
     }
 
     func display(items: [SwitcherItem], selected: SwitcherTargetID?, screen: NSScreen) {
+        guard prepare(items: items, selected: selected, screen: screen) else {
+            orderOut(nil)
+            return
+        }
+        if !isKeyWindow { makeKeyAndOrderFront(nil) }
+        else { orderFrontRegardless() }
+    }
+
+    /// Lay out real content without presenting or taking focus (also used by visual checks).
+    @discardableResult
+    func prepare(items: [SwitcherItem], selected: SwitcherTargetID?, screen: NSScreen) -> Bool {
         if !isVisible {
             pointer.reset(at: NSEvent.mouseLocation)
         }
         let showsTitles = items.contains { $0.windowTitle != nil }
         guard let newLayout = SwitcherLayout(applicationCount: items.count, availableSize: screen.visibleFrame.size,
                                             showsTitles: showsTitles) else {
-            orderOut(nil)
-            return
+            return false
         }
         let frame = NSRect(x: screen.frame.midX - newLayout.size.width / 2,
                            y: screen.frame.midY - newLayout.size.height / 2,
@@ -138,12 +165,23 @@ final class SwitcherPanel: NSPanel {
         row.frame = NSRect(x: 0, y: 0, width: newLayout.documentWidth, height: newLayout.rowHeight)
         for (index, id) in ids.enumerated() {
             guard let cell = cells[id] else { continue }
-            cell.item = items[index]
-            cell.titleBandHeight = newLayout.titleBandHeight
-            cell.titleFontSize = newLayout.labelFontSize
-            cell.frame = newLayout.tileFrame(at: index)
-            cell.isSelected = id == selected
-            cell.layoutTitle()
+            let itemChanged = !cell.item.hasSameContent(as: items[index])
+            let selected = id == selected
+            let selectionChanged = cell.isSelected != selected
+            let frame = newLayout.tileFrame(at: index)
+            let geometryChanged = cell.frame != frame || cell.titleBandHeight != newLayout.titleBandHeight ||
+                cell.titleFontSize != newLayout.labelFontSize
+            // Cached artwork, titles and badges rarely change during navigation.
+            // Touch only affected cells: repeated setters rebuild text/accessibility
+            // state and invalidate drawing even when their content is unchanged.
+            if itemChanged { cell.item = items[index] }
+            if selectionChanged { cell.isSelected = selected }
+            if geometryChanged {
+                cell.titleBandHeight = newLayout.titleBandHeight
+                cell.titleFontSize = newLayout.labelFontSize
+                cell.frame = frame
+            }
+            if itemChanged || selectionChanged || geometryChanged { cell.layoutTitle() }
         }
         selectedIndex = selected.flatMap { ids.firstIndex(of: $0) }
         if let selected, let cell = cells[selected] {
@@ -158,8 +196,7 @@ final class SwitcherPanel: NSPanel {
         if let selected, let cell = cells[selected] { row.scrollToVisible(cell.frame) }
         positionCaption()
         if showsTitles { nameLabel.isHidden = true }
-        if !isKeyWindow { makeKeyAndOrderFront(nil) }
-        else { orderFrontRegardless() }
+        return true
     }
 
     private func positionCaption() {

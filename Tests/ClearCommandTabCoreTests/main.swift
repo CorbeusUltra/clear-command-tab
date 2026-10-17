@@ -23,14 +23,22 @@ let modeChecks = MultiModeTests()
 let focusChecks = FocusIntentTests()
 let presentationChecks = PresentationTests()
 let statusMenuChecks = StatusMenuTests()
+let yellowButtonChecks = YellowButtonTests()
+let settingsFocusChecks = SettingsFocusTests()
 let cases: [(String, () -> Void)] = [
+    ("Settings focus has one fallback and expires after 800 ms", settingsFocusChecks.testOneFallbackAndBoundedLifetime),
+    ("Settings completion, closing and new intent invalidate old callbacks", settingsFocusChecks.testClosingExternalActionAndNewOpeningInvalidateCallbacks),
+    ("yellow button owns one matching click, never unrelated releases", yellowButtonChecks.testPlainClickAndUnrelatedRelease),
+    ("ineligible yellow button clicks keep native handling", yellowButtonChecks.testModifiedUnsupportedAndDisabledClicksPassThrough),
+    ("cancelled yellow button presses consume their release without hiding", yellowButtonChecks.testOutsideReleaseAndCancellationKeepOwnership),
+    ("queued yellow button actions expire on pause, disable, and tap loss", yellowButtonChecks.testQueuedActionsCannotSurviveDisablePauseOrTapLoss),
     ("settings waits for tracking completion, including native action after close callback", statusMenuChecks.testClosingMenuDoesNotEndItsTrackingCall),
     ("ordinary menu dismissal and later openings cannot replay commands", statusMenuChecks.testOrdinaryDismissalDoesNotRequestSettings),
     ("menu shortcuts never intercept another app's commands", statusMenuChecks.testShortcutsOnlyBelongToAnOpenMenu),
     ("unrelated menu keys and modifier combinations pass through", statusMenuChecks.testUnrelatedMenuKeysPassThrough),
     ("quick MRU commit never reveals the panel", presentationChecks.testQuickMRUCommitNeverRevealsPanel),
     ("quick window commit never reveals the panel", presentationChecks.testQuickWindowCommitNeverRevealsPanel),
-    ("all three held chords reveal at 150 ms", presentationChecks.testHeldChordsRevealAt150Milliseconds),
+    ("held selection modes retain the 150 ms presentation delay", presentationChecks.testHeldChordsRevealAt150Milliseconds),
     ("further navigation shows the panel immediately", presentationChecks.testFurtherNavigationShowsImmediately),
     ("new gesture cannot reuse an old display deadline", presentationChecks.testRestartedGestureDoesNotUseOldDisplayDeadline),
     ("unverified focus is not an audible rejection", presentationChecks.testUnverifiedFocusDoesNotSoundLikeRejectedAction),
@@ -52,11 +60,10 @@ let cases: [(String, () -> Void)] = [
     ("new windows join their group without changing selection", modeChecks.testNewWindowJoinsItsGroupWithoutMovingSelection),
     ("reveal activates despite Cocoa's stale hidden cache", modeChecks.testRevealActivatesDespiteStaleHiddenFlag),
     ("failed reveal/terminated/hidden ordinary targets do not activate", modeChecks.testFailedRevealAndTerminatedAppDoNotActivate),
-    ("three shortcut modes and modifier priority", modeChecks.testShortcutDispatch),
+    ("app shortcuts preserve priority and leave Option-Tab unclaimed", modeChecks.testShortcutDispatch),
     ("modifier release commits the opening mode", modeChecks.testModifierReleaseAndModeLock),
     ("hidden-app mode preserves recency", modeChecks.testHiddenAppsRemainInMRU),
     ("window identities and independent MRU", modeChecks.testIndependentWindowIdentityAndRecency),
-    ("window closure and empty/single sessions", modeChecks.testWindowSessionReconciliation),
     ("titles fit count-adaptive window rows", modeChecks.testWindowTitleLayout),
     ("strict hidden filter and exclusions", checks.testStrictHiddenFilterAndExclusions),
     ("initial and remembered order", checks.testInitialOrderAndRememberedOrder),

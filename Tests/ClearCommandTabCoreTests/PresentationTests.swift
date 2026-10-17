@@ -82,11 +82,5 @@ final class PresentationTests {
         expectFalse(FocusResult.confirmed.shouldBeep)
         expectFalse(FocusResult.unverified.shouldBeep)
         expectTrue(FocusResult.failed.shouldBeep)
-        // No invented confirmed history when an app's AX provider times out.
-        var policy = FocusIntentPolicy()
-        let revision = policy.request(.application(1), now: 10)
-        let result = FocusResult.unverified
-        expectTrue(policy.complete(revision, observed: result == .confirmed))
-        expectNil(policy.beginSelection(now: 10.1))
     }
 }

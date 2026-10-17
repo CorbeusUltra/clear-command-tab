@@ -1,7 +1,7 @@
 import Foundation
 
 /// Keep a quick MRU flip invisible. Further navigation is deliberate cycling and
-/// reveals the panel immediately. The same delay applies to all three modes.
+/// reveals the panel immediately. The same delay applies to every mode.
 public struct SelectionPresentation: Sendable {
     private var deadline: TimeInterval?
     public init() {}

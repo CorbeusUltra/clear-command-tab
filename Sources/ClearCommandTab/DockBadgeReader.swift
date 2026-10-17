@@ -5,7 +5,7 @@ import ClearCommandTabCore
 /// Dock accessibility exposes the badge the user actually sees, including symbols.
 /// All IPC stays off the keyboard callback and the main thread. No idle polling.
 final class DockBadgeReader {
-    private let queue = DispatchQueue(label: "local.lucas.VisibleTab.badges", qos: .utility)
+    private let queue = DispatchQueue(label: ApplicationIdentity.bundleIdentifier + ".badges", qos: .utility)
     private var bundleIDs: [URL: String] = [:] // confined to queue
 
     func read(dockPID: pid_t, completion: @escaping ([String: String]) -> Void) {

@@ -28,7 +28,9 @@ public enum SwitcherMode: Sendable {
         if modifiers.contains(.command) {
             return modifiers.contains(.option) ? .hiddenApplications : .applications
         }
-        return modifiers.contains(.option) ? .windows : nil
+        // Window-only switching is parked. Keep Option-Tab available to other
+        // applications; retained window models are documented in PARKED_FEATURES.
+        return nil
     }
 
     public func isHeld(by modifiers: ShortcutModifiers) -> Bool {

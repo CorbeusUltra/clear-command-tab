@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import ClearCommandTabCore
 
 if CommandLine.arguments.contains("--diagnostics") {
     let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && !$0.isTerminated }
@@ -34,7 +35,7 @@ if CommandLine.arguments.contains("--diagnostics") {
         }
     }
     if otherInstance != nil {
-        DistributedNotificationCenter.default().postNotificationName(.init("local.lucas.VisibleTab.showSettings"),
+        DistributedNotificationCenter.default().postNotificationName(.init(ApplicationIdentity.showSettingsNotification),
                                                                     object: nil, userInfo: nil, deliverImmediately: true)
     } else {
         MainActor.assumeIsolated {

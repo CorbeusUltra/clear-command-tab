@@ -189,7 +189,7 @@ final class WindowTracker {
     // ownership before using its ID; a slow AX main-window query is then unnecessary.
     private var recentAppWindows: [Int32: TrackedWindow] = [:]
     var onChange: (() -> Void)?
-    private let queue = DispatchQueue(label: "local.lucas.VisibleTab.windows", qos: .utility)
+    private let queue = DispatchQueue(label: ApplicationIdentity.bundleIdentifier + ".windows", qos: .utility)
     private var focusEpoch = WindowSnapshotEpoch()
     private lazy var scanner = AXWindowScanner(onEvent: { [weak self] in
         DispatchQueue.main.async { self?.scheduleRefresh() }

@@ -1,12 +1,47 @@
 import AppKit
 import ObjectiveC
 
-enum GlassProfile: String {
-    case current, altTab
+/// A solid surface with dynamic system colors, without a visual-effect view.
+final class MatteSurface: NSView {
+    let isSelection: Bool
+
+    init(selection: Bool = false) {
+        isSelection = selection
+        super.init(frame: .zero)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        layer?.backgroundColor = (isSelection ? NSColor.unemphasizedSelectedContentBackgroundColor : NSColor.windowBackgroundColor)
+            .withAlphaComponent(1).cgColor
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
+enum GlassProfile: String, CaseIterable {
+    case current, altTab, matte
     static let preferenceKey = "glassProfile"
 
+    var title: String {
+        switch self {
+        case .current: return "fully transparent"
+        case .altTab: return "original"
+        case .matte: return "Matte"
+        }
+    }
+
     static var selected: Self {
-        Self(rawValue: UserDefaults.standard.string(forKey: preferenceKey) ?? "altTab") ?? .current
+        selected(in: .standard)
+    }
+
+    static func selected(in defaults: UserDefaults) -> Self {
+        Self(rawValue: defaults.string(forKey: preferenceKey) ?? "altTab") ?? .current
     }
 
     static var altTabAvailable: Bool {
@@ -26,12 +61,17 @@ enum GlassProfile: String {
     }
 
     func makeSurface(content: NSView) -> NSView {
+        if self == .matte {
+            let surface = MatteSurface()
+            surface.addSubview(content)
+            return surface
+        }
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.style = .clear
             glass.tintColor = nil
             if self == .altTab, let method = Self.variantSetter {
-                // Independent, bounded adaptation of AltTab's clear-glass profile.
+                // Bounded adaptation of AltTab's clear-glass profile; see docs/PROVENANCE.md.
                 // Only the material variant changes; focus, refraction, and content remain native.
                 typealias Setter = @convention(c) (AnyObject, Selector, Int) -> Void
                 let setter = unsafeBitCast(method_getImplementation(method), to: Setter.self)
@@ -47,5 +87,16 @@ enum GlassProfile: String {
         blur.wantsLayer = true
         blur.addSubview(content)
         return blur
+    }
+
+    func makeSelection() -> NSView {
+        if self == .matte { return MatteSurface(selection: true) }
+        let selection = NSVisualEffectView()
+        selection.material = .selection
+        selection.blendingMode = .withinWindow
+        selection.state = .active
+        selection.isEmphasized = false
+        selection.wantsLayer = true
+        return selection
     }
 }

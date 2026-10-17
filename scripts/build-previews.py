@@ -18,7 +18,7 @@ for count, appearance in [(1, "light"), (3, "light"), (18, "light"), (50, "light
     subprocess.run(["ditto", str(source), str(bundle)], check=True)
     plist_path = bundle / "Contents/Info.plist"
     info = plistlib.loads(plist_path.read_bytes())
-    info.update(CFBundleIdentifier=f"local.lucas.VisibleTab.Preview{count}.{appearance}",
+    info.update(CFBundleIdentifier=f"{info['CFBundleIdentifier']}.Preview{count}.{appearance}",
                 CFBundleName=name, CFBundleDisplayName=name, CFBundleExecutable="PreviewLauncher")
     plist_path.write_bytes(plistlib.dumps(info))
     launcher = bundle / "Contents/MacOS/PreviewLauncher"

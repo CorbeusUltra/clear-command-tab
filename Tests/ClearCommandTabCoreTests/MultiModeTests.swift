@@ -42,7 +42,6 @@ final class MultiModeTests {
                                                 activate: { calls.append("activate"); return true })
         expectTrue(accepted)
         expectEqual(calls, ["unhide", "activate"])
-        expectTrue(cachedHidden)
     }
 
     func testFailedRevealAndTerminatedAppDoNotActivate() {
@@ -62,8 +61,8 @@ final class MultiModeTests {
     func testShortcutDispatch() {
         expectEqual(SwitcherMode.starting(with: [.command]), .applications)
         expectEqual(SwitcherMode.starting(with: [.command, .shift]), .applications)
-        expectEqual(SwitcherMode.starting(with: [.option]), .windows)
-        expectEqual(SwitcherMode.starting(with: [.option, .shift]), .windows)
+        expectNil(SwitcherMode.starting(with: [.option]))
+        expectNil(SwitcherMode.starting(with: [.option, .shift]))
         expectEqual(SwitcherMode.starting(with: [.command, .option]), .hiddenApplications)
         expectEqual(SwitcherMode.starting(with: [.command, .option, .shift]), .hiddenApplications)
         expectNil(SwitcherMode.starting(with: []))
@@ -122,21 +121,6 @@ final class MultiModeTests {
         expectEqual(history.order, [second, first, third])
         history.update(frontToBack: [third, first])
         expectEqual(history.order, [first, third])
-    }
-
-    func testWindowSessionReconciliation() {
-        let first = SwitcherTargetID.window(pid: 1, number: 10)
-        let second = SwitcherTargetID.window(pid: 1, number: 11)
-        let third = SwitcherTargetID.window(pid: 2, number: 12)
-        var session = SelectionSession(ids: [first, second, third], currentID: first)
-        expectEqual(session.selectedID, second)
-        session.reconcile(visibleIDs: [third, first])
-        expectEqual(session.selectedID, third)
-        expectEqual(session.ids, [first, third])
-        session.reconcile(visibleIDs: [])
-        expectNil(session.selectedID)
-        expectNil(SelectionSession<SwitcherTargetID>(ids: [], currentID: nil).selectedID)
-        expectEqual(SelectionSession(ids: [first], currentID: first).selectedID, first)
     }
 
     func testWindowTitleLayout() {

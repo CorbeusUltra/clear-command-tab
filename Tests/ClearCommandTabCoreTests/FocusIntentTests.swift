@@ -33,8 +33,6 @@ final class FocusIntentTests {
     func testRevealUsesObservedStateRatherThanRequestReturnValue() {
         var gate = ApplicationRevealGate()
         gate.wait(for: 1)
-        let cocoaRequestAccepted = false
-        expectFalse(cocoaRequestAccepted)
         expectFalse(gate.observe(pid: 1, hidden: nil))
         expectFalse(gate.observe(pid: 1, hidden: true))
         expectFalse(gate.observe(pid: 2, hidden: false))

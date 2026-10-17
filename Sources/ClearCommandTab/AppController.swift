@@ -7,10 +7,33 @@ import ClearCommandTabCore
 final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate, NSMenuDelegate {
     private let tracker = ApplicationTracker()
     private let keyboard = KeyboardTap()
+    private var yellowButtonFailure: String?
+    private lazy var yellowButton = YellowButtonInterceptor(onHide: { [weak self] pid in
+        guard let self, !self.paused, !self.preview,
+              UserDefaults.standard.bool(forKey: YellowButtonInterceptor.preferenceKey),
+              let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return }
+        self.settingsFocus.cancel()
+        self.cancelSelection()
+        self.focus.cancel(reason: "yellow-button")
+        let accepted = app.hide()
+        Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "YellowButton")
+            .notice("hide request pid=\(pid) accepted=\(accepted)")
+        if !accepted && !app.isHidden {
+            self.yellowButtonFailure = "The selected app did not accept Hide. Its windows were not minimized."
+            self.updateControls()
+        }
+    }, onStatus: { [weak self] message in
+        guard let self else { return }
+        self.yellowButtonFailure = message
+        Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "YellowButton")
+            .notice("mouse interception: \(message ?? "Ready", privacy: .public)")
+        self.updateControls()
+    })
     private let windows = WindowTracker()
     private let focus = FocusCoordinator()
     private let panel = SwitcherPanel()
     private let settings = SettingsWindow()
+    private let settingsFocus = SettingsFocusCoordinator()
     private let badgeReader = DockBadgeReader()
     private var badges: [String: String] = [:]
     private var badgeRefresh: Timer?
@@ -32,20 +55,21 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     private var statusMenu: NSMenu?
     private var statusMenuSession = StatusMenuSession()
     private var statusMenuOwnedKeys: Set<UInt16> = []
-    private var settingsActivationPending = false
-    private let settingsLog = Logger(subsystem: "local.lucas.VisibleTab", category: "Settings")
+    private let settingsLog = Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "Settings")
     private var paused = false
+    private var permissionChecked = false
     private var status = ""
     private var reportedStatus: String?
     private var observers: [NSObjectProtocol] = []
     private let preview = CommandLine.arguments.contains("--preview")
     private var cachedForegroundScreen: NSScreen?
-    private let screenQueue = DispatchQueue(label: "local.lucas.VisibleTab.screen", qos: .utility)
+    private let screenQueue = DispatchQueue(label: ApplicationIdentity.bundleIdentifier + ".screen", qos: .utility)
     private var previewSelection: SwitcherTargetID?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        UserDefaults.standard.register(defaults: ["showMenuBarIcon": true, GlassProfile.preferenceKey: "altTab"])
+        UserDefaults.standard.register(defaults: ["showMenuBarIcon": true, GlassProfile.preferenceKey: "altTab",
+                                                  YellowButtonInterceptor.preferenceKey: false])
         keyboard.delegate = self
         focus.onTransition = { [weak self] active in self?.windows.setFocusTransition(active) }
         focus.onConfirmed = { [weak self] target, window in
@@ -62,6 +86,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             guard let self else { return }
             if self.preview { self.renderPreview(); return }
             if activated {
+                self.settingsFocus.foregroundChanged(to: self.tracker.frontmostPID)
                 self.updateForegroundScreen()
                 // H can hide the foreground app while cycling; its automatic successor
                 // must not cancel the switcher like an unrelated user activation would.
@@ -109,14 +134,23 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             self?.updateControls()
         }
         settings.onTogglePause = { [weak self] in self?.togglePause() }
-        settings.onCheckPermission = { [weak self] in self?.checkPermission() }
+        settings.onClose = { [weak self] in self?.settingsFocus.cancel() }
+        settings.onYellowButton = { [weak self] enabled in
+            UserDefaults.standard.set(enabled, forKey: YellowButtonInterceptor.preferenceKey)
+            self?.checkPermission()
+        }
+        settings.onCheckPermission = { [weak self] in
+            self?.permissionChecked = true
+            self?.checkPermission()
+        }
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(reopenFromNotification),
-                                                             name: .init("local.lucas.VisibleTab.showSettings"), object: nil)
+                                                             name: .init(ApplicationIdentity.showSettingsNotification), object: nil)
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.sessionDidResignActiveNotification,
                      NSWorkspace.willSleepNotification, NSWorkspace.activeSpaceDidChangeNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    self?.settingsFocus.cancel()
                     self?.cancelSelection()
                     self?.windows.invalidateSnapshot()
                     self?.updateForegroundScreen()
@@ -166,6 +200,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        settingsFocus.cancel()
         statusItemVisibilityObservation?.invalidate()
         keyboard.stop()
         windows.setEnabled(false)
@@ -182,43 +217,43 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         }
         checkPermission()
         updateControls()
+        cancelSelection()
         settings.showWindow(nil)
-        settingsActivationPending = true
-        NSApp.activate()
-        settings.window?.makeKeyAndOrderFront(nil)
-        // An accessory app's normal ordering is relative to its own windows.
-        // Settings is an explicit user request and must be above the current app.
-        settings.window?.orderFrontRegardless()
-        if NSApp.isActive { settingsActivationPending = false }
+        if let window = settings.window { settingsFocus.present(window) }
         settingsLog.notice("present visible=\(self.settings.window?.isVisible == true) key=\(self.settings.window?.isKeyWindow == true) active=\(NSApp.isActive)")
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard settingsActivationPending else { return }
-        settingsActivationPending = false
-        if settings.window?.isVisible == true { settings.window?.makeKeyAndOrderFront(nil) }
-        settingsLog.notice("activation confirmed key=\(self.settings.window?.isKeyWindow == true)")
+        settingsFocus.applicationDidBecomeActive()
     }
+
+    func applicationDidResignActive(_ notification: Notification) { settingsFocus.cancel() }
 
     @objc private func checkPermission() {
         guard !preview else { updateControls(); return }
+        let trusted = AXIsProcessTrusted()
+        if !trusted {
+            cancelSelection()
+            ownership.reset()
+            keyboard.stop()
+        }
         if paused { status = "Paused. Command-Tab is handled by macOS." }
         else if keyboard.start() {
-            status = WindowTracker.identityAvailable
-                ? "Ready. ⌘Tab: visible apps · ⌘⌥Tab: hidden apps · ⌥Tab: windows."
-                : "Ready for app switching. Option-Tab is unavailable: window identity is not supported on this macOS."
+            status = "Ready. ⌘Tab: visible apps · ⌘⌥Tab: hidden apps."
             if !FocusCoordinator.nativeAvailable {
                 status += " Native focus is unavailable; using public activation."
             }
         }
-        else if !AXIsProcessTrusted() {
+        else if !trusted {
             status = "Accessibility permission is required. Grant permission, then click Check permission."
         } else {
             status = "Could not intercept the keyboard. Command-Tab is handled by macOS. Try Check permission."
         }
         windows.setEnabled(keyboard.isRunning && !paused)
+        yellowButton.setEnabled(!paused && keyboard.isRunning &&
+            UserDefaults.standard.bool(forKey: YellowButtonInterceptor.preferenceKey))
         if reportedStatus != status {
-            Logger(subsystem: "local.lucas.VisibleTab", category: "Lifecycle").notice("status=\(self.status, privacy: .public)")
+            Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "Lifecycle").notice("status=\(self.status, privacy: .public)")
             reportedStatus = status
         }
         refreshWindows()
@@ -278,8 +313,23 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         image?.isTemplate = true
         statusItem?.button?.image = image
         statusItem?.button?.appearsDisabled = paused || (!preview && !keyboard.isRunning)
-        statusMenu?.item(withTag: 1)?.title = paused ? "Paused" : keyboard.isRunning ? "Ready" : "Permission required"
-        settings.update(status: status, paused: paused, iconVisible: visible, glassProfile: GlassProfile.selected)
+        let trusted = !preview && AXIsProcessTrusted()
+        statusMenu?.item(withTag: 1)?.title = paused ? "Paused" : keyboard.isRunning ? "Ready"
+            : trusted ? "Shortcuts unavailable" : "Permission required"
+        let hidesOnYellow = UserDefaults.standard.bool(forKey: YellowButtonInterceptor.preferenceKey)
+        var limitations: [String] = []
+        if keyboard.isRunning {
+            if !WindowTracker.identityAvailable { limitations.append("Window switching is unavailable on this macOS.") }
+            if !FocusCoordinator.nativeAvailable { limitations.append("Using public app activation.") }
+        } else if trusted {
+            limitations.append("Could not start keyboard interception. Click Check permission to retry.")
+        }
+        let settingsStatus = SettingsStatus(permissionChecked: permissionChecked, accessibilityGranted: trusted,
+            keyboardRunning: keyboard.isRunning, paused: paused, preview: preview,
+            detail: limitations.isEmpty ? nil : limitations.joined(separator: " "),
+            yellowButtonFailure: hidesOnYellow ? yellowButtonFailure : nil)
+        settings.update(status: settingsStatus, iconVisible: visible,
+                        glassProfile: GlassProfile.selected, yellowButtonHidesApp: hidesOnYellow)
     }
 
     private func statusItemVisibilityChanged(_ itemID: ObjectIdentifier) {
@@ -308,6 +358,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
 
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusMenu else { return }
+        settingsFocus.cancel()
         statusMenuSession.menuWillOpen()
         cancelSelection()
         statusItem?.button?.highlight(true)
@@ -372,6 +423,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         cancelSelection()
         ownership.reset()
         windows.setEnabled(false)
+        yellowButton.setEnabled(false)
         status = reason
         updateControls()
     }
@@ -500,6 +552,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     }
 
     private func beginSelection(mode: SwitcherMode, backwards: Bool) {
+        settingsFocus.cancel()
         selectionOrigin = focus.beginSelection()
         selectionGeneration += 1
         let generation = selectionGeneration

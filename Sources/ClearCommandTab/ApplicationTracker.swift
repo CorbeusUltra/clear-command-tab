@@ -24,7 +24,7 @@ final class ApplicationTracker {
     private var iconInFlight: Set<Int32> = []
     private var deferredIcons: Set<Int32> = []
     private var lastIconRefresh: [Int32: TimeInterval] = [:]
-    private let iconQueue = DispatchQueue(label: "local.lucas.VisibleTab.icons", qos: .utility)
+    private let iconQueue = DispatchQueue(label: ApplicationIdentity.bundleIdentifier + ".icons", qos: .utility)
     private let defaults: UserDefaults
     private let workspace = NSWorkspace.shared
 

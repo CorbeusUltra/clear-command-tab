@@ -4,8 +4,8 @@ import Darwin
 import os
 import ClearCommandTabCore
 
-private let revealLog = Logger(subsystem: "local.lucas.VisibleTab", category: "RevealFocus")
-private let focusLog = Logger(subsystem: "local.lucas.VisibleTab", category: "Focus")
+private let revealLog = Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "RevealFocus")
+private let focusLog = Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "Focus")
 
 private final class FocusTicket: @unchecked Sendable {
     private let lock = NSLock()
@@ -53,6 +53,136 @@ private enum NativeFocusBridge {
             guard result == .success else { return false }
         }
         return ticket.valid
+    }
+}
+
+/// Settings has its own short-lived intent, separate from switcher MRU/focus work.
+/// The same optional native bridge is used once, only after public activation.
+@MainActor
+final class SettingsFocusCoordinator {
+    private let log = Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "SettingsFocus")
+    private let queue = DispatchQueue(label: ApplicationIdentity.bundleIdentifier + ".settingsFocus", qos: .userInteractive)
+    private var intent = SettingsFocusIntent()
+    private var ticket: FocusTicket?
+    private weak var window: NSWindow?
+    private var windowNumber: CGWindowID = 0
+    private var originPID: Int32?
+    private var timer: Timer?
+    private var monitor: Any?
+    private var observationInFlight = false
+
+    func present(_ window: NSWindow) {
+        cancel()
+        self.window = window
+        windowNumber = CGWindowID(window.windowNumber)
+        originPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let revision = intent.begin(now: ProcessInfo.processInfo.systemUptime)
+        ticket = FocusTicket()
+        monitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+            MainActor.assumeIsolated {
+                // The native key-window record is an off-screen, down-only event.
+                if event.type != .keyDown, let point = event.cgEvent?.location {
+                    let top = NSScreen.screens.first?.frame.maxY ?? 0
+                    let cocoa = NSPoint(x: point.x, y: top - point.y)
+                    guard NSScreen.screens.contains(where: { $0.frame.contains(cocoa) }) else { return }
+                }
+                self?.cancel()
+            }
+        }
+        NSApp.unhide(nil)
+        NSApp.activate()
+        window.makeMain()
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        // A default-mode handoff lets menu tracking and AppKit activation finish.
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            MainActor.assumeIsolated { self?.probe(revision) }
+        }
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.probe(revision) }
+        }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .default)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self, self.intent.revision == revision else { return }
+            self.log.notice("Settings keyboard focus not confirmed before deadline")
+            self.cancel()
+        }
+    }
+
+    func applicationDidBecomeActive() {
+        guard let window, window.isVisible, ticket?.valid == true else { return }
+        window.makeMain()
+        window.makeKey()
+    }
+
+    func foregroundChanged(to pid: Int32?) {
+        guard ticket != nil, pid != ProcessInfo.processInfo.processIdentifier, pid != originPID else { return }
+        cancel()
+    }
+
+    func cancel() {
+        intent.cancel()
+        ticket?.cancel()
+        ticket = nil
+        timer?.invalidate()
+        timer = nil
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        observationInFlight = false
+    }
+
+    private func probe(_ revision: UInt64) {
+        guard intent.isCurrent(revision, now: ProcessInfo.processInfo.systemUptime),
+              let ticket, ticket.valid, let window, window.isVisible,
+              window.windowNumber == Int(windowNumber) else { return }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        guard NSApp.isActive, window.isKeyWindow,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+            requestFallback(revision, ticket: ticket)
+            return
+        }
+        guard !observationInFlight else { return }
+        observationInFlight = true
+        queue.async { [weak self] in
+            let observation = FocusActions.observe(pid: pid, ticket: ticket)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.intent.isCurrent(revision, now: ProcessInfo.processInfo.systemUptime),
+                      ticket.valid else { return }
+                self.observationInFlight = false
+                let target = SwitcherTargetID.window(pid: pid, number: self.windowNumber)
+                if self.window?.isVisible == true, self.window?.isKeyWindow == true, NSApp.isActive,
+                   FocusConfirmation.matches(target: target, expectedWindow: target,
+                       frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                       keyboardPID: observation.appPID, window: observation.window) {
+                    self.log.notice("Settings foreground and keyboard window confirmed")
+                    self.cancel()
+                } else { self.requestFallback(revision, ticket: ticket) }
+            }
+        }
+    }
+
+    private func requestFallback(_ revision: UInt64, ticket: FocusTicket) {
+        guard NativeFocusBridge.available, AXIsProcessTrusted(),
+              intent.takeFallback(revision, now: ProcessInfo.processInfo.systemUptime) else { return }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let number = windowNumber
+        let origin = originPID
+        queue.async { [weak self] in
+            guard ticket.valid else { return }
+            let foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            guard foreground == pid || foreground == origin else { return }
+            let sent = NativeFocusBridge.focus(pid: pid, window: number, allWindows: false, ticket: ticket, trace: false)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.intent.isCurrent(revision, now: ProcessInfo.processInfo.systemUptime),
+                      ticket.valid else { return }
+                self.log.notice("Settings native focus request sent=\(sent)")
+                if NSApp.isActive, self.window?.isVisible == true {
+                    self.window?.makeMain()
+                    self.window?.makeKey()
+                }
+            }
+        }
     }
 }
 
@@ -148,7 +278,7 @@ private enum FocusActions {
         case .application(let pid):
             window = appWindow(pid: pid, preferred: record, ticket: ticket)
             // Unhide already restores the app's windows. Focus its real window
-            // with the same user-generated mode as Option-Tab, not a bulk front.
+            // using exact-window focus rather than bringing every window forward.
             allWindows = !revealed
         }
         guard ticket.valid else { return .init() }
@@ -234,8 +364,8 @@ final class FocusCoordinator {
     deinit {
         if let revealObserver { NSWorkspace.shared.notificationCenter.removeObserver(revealObserver) }
     }
-    private let queue = DispatchQueue(label: "local.lucas.VisibleTab.focus", qos: .userInteractive)
-    private let observationQueue = DispatchQueue(label: "local.lucas.VisibleTab.focusReadback", qos: .utility)
+    private let queue = DispatchQueue(label: ApplicationIdentity.bundleIdentifier + ".focus", qos: .userInteractive)
+    private let observationQueue = DispatchQueue(label: ApplicationIdentity.bundleIdentifier + ".focusReadback", qos: .utility)
 
     func beginSelection() -> SwitcherTargetID? {
         if tracingReveal { revealLog.notice("cancel new-selection revision=\(self.policy.revision)") }

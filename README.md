@@ -1,217 +1,74 @@
 # ClearCommandTab
 
-Formerly **VisibleTab**. The technical bundle identifier remains `local.lucas.VisibleTab` to preserve existing preferences and signing identity during the rename.
+A native macOS app switcher with two shortcuts:
 
-A small native macOS switcher with three modes. **Command-Tab** excludes only applications hidden with Hide / Command-H, preserving minimized, windowless, and other-Space apps. **Command-Option-Tab** reveals a selected hidden app. **Option-Tab** switches between non-minimized windows of visible apps on the current Space, with an icon and title for each window.
+| Shortcut 	     |     | Destinations                                          |
+| ------------------ | --- | ---                                                   |
+| Command-Tab        | ⌘   + ⇆  | Visible apps, including minimized and windowless apps |
+| Command-Option-Tab | ⌘⌥ + ⇆ | Hidden apps; reveal the selected app                  |
+
+Hold the opening modifier to browse, add Shift to go backward, and release it to switch. A quick tap switches immediately; the panel appears after 150 ms when held. Arrow keys navigate and Escape cancels. Command-Tab excludes apps hidden with Hide / Command-H.
+
+**Licence: [GPL-3.0-only](LICENSE).** Commercial use, modification and redistribution are allowed under GPLv3; distributing a covered binary requires corresponding source under its terms. This choice preserves compatibility with the referenced AltTab adaptations. See [licensing](docs/LICENSING.md), [provenance](docs/PROVENANCE.md) and [third-party notices](THIRD_PARTY_NOTICES.md). This folder is not a notarized release.
+
+## Requirements
+
+- macOS 14 or later to run. Liquid Glass requires macOS 26 or later; older systems use the fallback material.
+- Swift 6 tools and a macOS 26 SDK or newer to compile (`NSGlassEffectView` is referenced at build time). Xcode or compatible Command Line Tools must be selected with `xcode-select`.
+- Python 3 for installer checks and optional integration tooling. No external Swift packages or downloaded binary dependencies.
+- A logged-in macOS display session for AppKit checks and benchmarks.
 
 ## Build and install
 
-Requires macOS 14 or later and Swift 6 tools (Xcode or Command Line Tools). There are no third-party dependencies.
+From the project directory:
 
 ```sh
-cd /Users/lucas/Documents/code/all/clear-command-tab
-swift run ClearCommandTabChecks
-zsh scripts/install-app.sh
-open /Users/lucas/Applications/ClearCommandTab.app
-```
-
-The installer refuses to replace a running instance. An existing installation (including the former `VisibleTab.app`) is moved to the macOS Trash before replacement. The app is signed with the existing local Apple Development certificate through `scripts/sign-app.sh`. The certificate and bundle identifier are kept stable across updates; the installer never silently falls back to ad hoc signing. The migration from the earlier ad hoc identity requires one renewed Accessibility grant. Subsequent builds should retain that grant as long as their designated requirement remains compatible. This is a local development app, not a notarized distribution build.
-
-## Local version history
-
-This project is a local Git repository on `main`. No remote is configured and nothing is published. Completed changes are recorded as local commits instead of creating another source/app backup directory for each update. Build outputs and app bundles are ignored.
-
-```sh
-git log --oneline --decorate
-git tag --list
-```
-
-The existing source snapshots were imported as tags `v0.3.4` and `v0.4.0` through `v0.4.6`. Each imported source file was checked against its original backup. The former expanded backup folders, including signed apps and restore notes, are preserved in `/Users/lucas/Documents/code/all/clear-command-tab-archives/visible-tab-backups-through-0.4.5.zip`. The pre-fix installed app is retained as `ClearCommandTab-0.4.6-build14.zip` in that directory. Compressed archives avoid advertising old app bundles to Spotlight. Historical paths in the release notes describe their original locations.
-
-## First launch
-
-1. Quit other switchers that capture Command-Tab (such as AltTab).
-2. Open ClearCommandTab. Click **Grant Accessibility…** and enable ClearCommandTab in **System Settings → Privacy & Security → Accessibility**. If macOS asks to authenticate, complete that step yourself.
-3. Return to ClearCommandTab and click **Check permission**. The status should read **Ready**.
-4. Close the settings window and use Command-Tab.
-
-No Screen Recording permission is needed: ClearCommandTab uses app icons and window bounds, not screenshots or window contents. It does not access the network or record typed text.
-
-On macOS 27, the permission page is named **Device Control and Data Access** under **Privacy & Security**; the app's permission button opens it directly. When migrating from an old ad hoc build to the stable signed identity, an enabled switch can still reference the old binary signature. If toggling it and restarting do not restore **Ready**, select only ClearCommandTab in that list, remove its permission entry, then use **Add** to select `/Users/lucas/Applications/ClearCommandTab.app` and enable the current app. This removes a permission record, not the app or its files.
-
-## Settings window
-
-The native toolbar has three tabs: **Settings** for glass, startup, menu-bar visibility and permissions; **Guide** for the three shortcuts and quick-switch behavior; **About** for the app icon, version/build and credits. The glass labels are **fully transparent** (previously Current) and **original** (previously AltTab). Only their names changed; existing selections and rendering are preserved.
-
-### Restore a missing menu bar icon
-
-On macOS 26 and later, check **System Settings → Menu Bar → Allow in the Menu Bar → ClearCommandTab**. This macOS switch is separate from the app's **Show menu bar icon** preference. Apple currently provides no public API for the app to read or override that permission. A checked in-app preference therefore cannot guarantee that macOS permits the icon. See [Apple's explanation](https://developer.apple.com/forums/thread/801489).
-
-Reopen ClearCommandTab from Spotlight or Applications, click **Menu Bar Settings…** in Settings to reach the system pane, enable the system switch, then enable **Show menu bar icon** in the app. For ordinary AppKit visibility changes, the checkbox follows the reported native state, and turning it on explicitly re-shows the existing status item. No Control Center preferences are edited behind the user's back.
-
-Command-Q also quits ClearCommandTab while its Settings, Guide or About tab is active. It is a window-local key equivalent and does not capture another app's Command-Q.
-
-## Controls
-
-| Input | Action |
-| --- | --- |
-| Left-click the menu bar icon | Pause / resume all three modes |
-| Right-click or Control-click the menu bar icon | Open the menu with Settings and Quit |
-| Quick Command-Tab | Switch to the previously active visible app |
-| Command-Option-Tab | Cycle hidden apps; release Command to reveal the selection |
-| Option-Tab | Cycle grouped current-Space windows; release Option to focus the selection |
-| Hold Command or Option, then Tab | Display the panel after 150 ms; a quick release switches immediately without showing it |
-| Shift-Tab | Move backward |
-| Left / Right arrow | Move backward / forward |
-| Release Command | Activate the selected app |
-| Escape | Cancel |
-| H in Command-Tab | Hide the selected app and remove it from the list |
-| Q in Command-Tab | Request a normal quit; never force quit |
-| Move the pointer over / click an icon | Select / activate that app |
-
-Selection wraps at both ends and remains in the mode selected by the opening chord. Releasing Option before Command in the hidden-app mode does not change its mode or reveal anything early. Escape leaves all hidden apps hidden. Unknown shortcuts, Control chords, and modifiers belonging to another mode cancel selection and pass through. H and Q retain their original behavior in the ordinary Command-Tab mode.
-
-Window mode includes covered windows on the current Space across connected screens. It excludes hidden apps, minimized windows, windowless placeholders, inactive tabs, and utility panels. App and window MRU are separate. Window groups follow app MRU; each group keeps its own window MRU. Newly discovered windows join their app group without changing the current selection. A first run uses front-to-back window order until focus changes are observed. Window discovery runs asynchronously. Normal switching uses already-known destinations and does not request a new full scan. At startup or after a Space change, hold Option while the initial window snapshot is gathered. Releasing it before any destinations are ready cancels immediately, rather than activating a window later. Cold discovery is bounded to 900 ms. Unsupported or unresponsive Accessibility windows may be omitted. Focus uses an optional native front-process/key-window bridge followed by Accessibility Raise. Actual foreground and keyboard focus are read back before updating MRU; an accepted API request alone does not count as success. If the bridge is missing, public app activation and AX attributes remain a fallback with weaker focus guarantees.
-
-All three modes use the same 150 ms presentation delay. Releasing the held modifier switches immediately without displaying the panel; further Tab/arrow navigation displays it immediately.
-
-A stationary pointer does not select an icon when the panel opens beneath it. Pointer selection starts after actual movement of at least one logical point; clicks remain immediate.
-
-The right-click menu provides **Settings…** (Command-,) and **Quit ClearCommandTab** (Command-Q), with a disabled status label. These key equivalents act on ClearCommandTab while its menu is open. The icon stays highlighted until the menu closes. There is no redundant Pause / Resume menu action. A left click toggles Pause / Resume. The same menu-bar arrow symbol is dimmed while paused, instead of being replaced by a pause glyph. Pause or Quit returns keyboard shortcuts to macOS and the foreground app; the menu stays accessible while paused. Pause remains temporary, as in earlier versions. **Show menu bar icon** can be disabled; reopen ClearCommandTab from Applications or Spotlight to reach the settings again. Reopening does not start another instance.
-
-**Launch at login** is off initially. It uses macOS Service Management and can require approval in **System Settings → General → Login Items & Extensions**.
-
-AltTab's existing preferences are preserved, including its own launch-at-login setting. Before enabling ClearCommandTab at login, disable AltTab's automatic launch or ensure it uses a different shortcut.
-
-## Design and limits
-
-- Swift and AppKit, with a testable model separate from the UI and keyboard integration.
-- Application state follows NSWorkspace notifications. Window state follows Accessibility notifications and Space changes, with coalesced reads on a discovery queue, per-element timeouts, and a bounded discovery pass. All three modes share a serial user-interactive focus queue, so actions never wait behind a full discovery scan. A new selection cancels outstanding actions and confirmation for an older commit. Confirmation reads are bounded to 800 ms and never retry activation; physical input, unrelated activation, pause, or a Space/session change cancels pending work. WindowServer metadata reads stay outside the UI and global keyboard callback. No periodic window polling or screenshots are used. A 100 ms watchdog exists only during a held selection to dismiss a stale panel if Secure Input prevents the modifier release from reaching the event tap.
-- MRU order is observed by ClearCommandTab and remembered by app identity between launches. It cannot read Apple's private switching history. The first launch places the foreground app first, followed by alphabetical app names.
-- The panel is nonactivating, so the foreground application remains unchanged while selecting. It temporarily becomes the key window to keep native clear glass in its active appearance; dismissal releases that keyboard focus before activating the selected app. Selecting an app activates all its windows, without reopening documents or restoring minimized windows.
-- Secure Input can temporarily restore the native switcher. Missing Accessibility permission or an event-tap failure also leaves the native switcher available.
-- On macOS 26 and later, **Settings → Glass effect → fully transparent** uses the previous public `NSGlassEffectView` `.clear` style. **original**, the initial profile, applies the optional internal `set_variant:` value 3 to that same clear material, inspired by [AltTab's material implementation](https://github.com/lwouis/alt-tab-macos/blob/master/src/switcher/main-window/TilesPanelBackgroundView.swift). The method and its signature are checked before use; unavailable profiles fall back to fully transparent. Switching back to fully transparent constructs a fresh public view, without guessing a private reset value. Content, key-window handling, badges, and selection material are shared. An exact native visual match is not claimed. macOS 14–15 retains the older material; system appearance settings are never changed.
-- The optional `_AXUIElementGetWindow` bridge identifies windows so they can be matched to the public on-screen WindowServer list. It is resolved at runtime and used only for identity, with no injection or system changes. If unavailable, Option-Tab is disabled with an explanation; both app modes remain functional.
-- Application icons are rasterized from the actual running app's icon. They load on a background queue at discovery, refresh individually on activation (throttled to five seconds), and receive four bounded launch retries to avoid keeping an early placeholder indefinitely. Panel opening uses the cached bitmap without any icon query or decoding. Icon resolution runs outside both the global keyboard callback and the UI thread. App names, bundle identities, Dock PID, and screen placement are also cached for the switching path. The original optical margins are retained. For standalone Python processes reporting a generic document icon, a targeted fallback reads mapped-file metadata to identify an actually loaded native Matplotlib backend and uses that environment's Matplotlib artwork. It does not infer the icon merely from an installed package, run Python, or change the process name.
-- App badges come from the Dock's accessibility status labels and match apps by bundle identity. They refresh asynchronously once per second only while switching, using the existing Accessibility permission. Apps without an exposed Dock badge have no badge; notification contents are never read.
-- The panel is a native approximation, not Apple's private UI. Its width follows the app count, with full-size icons when there is room. Dense rows proportionally reduce icons, gaps, margins, and panel height. Horizontal scrolling is used only after reaching the minimum readable icon size. The selected app's name follows its icon and stays within the panel.
-- Selection uses AppKit's neutral selection material within the window, behind the app icon, instead of a theme-dependent white/black translucent fill. The native clear glass remains the outer surface.
-- Resizing is animated only for an already visible panel and respects Reduce Motion. The glass material follows the system appearance and accessibility rendering.
-- Space changes, session changes, sleep, clicks outside the panel, and unrelated app activations cancel a pending selection. An expected activation from our previous commit is recognized once for up to 800 ms and cannot dismiss a newer selection. Focus snapshots are versioned on focus transitions and foreground changes; stale responses cannot restore the old focus or MRU. A rapid selection uses the previous logical target to choose the next destination without modifying confirmed history.
-
-The glass profile, settings, and a bounded app-order history are stored in the `local.lucas.VisibleTab` UserDefaults domain. No keystroke history is stored.
-
-## Development checks
-
-```sh
-swift run ClearCommandTabChecks
-zsh scripts/check-application-icons.sh
+zsh scripts/check.sh
 zsh scripts/build-app.sh
-.build/ClearCommandTab.app/Contents/MacOS/ClearCommandTab --diagnostics
-open .build/ClearCommandTab.app --args --preview
+# Quit the currently running ClearCommandTab before installation.
+zsh scripts/install-app.sh --no-build
+open "$HOME/Applications/ClearCommandTab.app"
 ```
 
-`--diagnostics` prints a local JSON snapshot of running applications, executable/bundle paths, raster-icon sizes and hashes, Dock badges, optional bridge availability, and Accessibility trust, then exits. Icon hashes describe app artwork only; no screenshots or window content are read. `--preview` displays the panel without intercepting shortcuts or activating apps and **automatically quits after six seconds**. `--preview-count=3`, `--preview-light`, and `--preview-dark` provide visual QA cases; `--preview-duration=N` sets a lifetime between 2 and 30 seconds. Neither mode is required for everyday use.
+The build creates `.build/ClearCommandTab.app`. A fresh checkout explicitly uses ad hoc signing for local development. For updates that should retain Accessibility identity, use a stable local signing certificate: copy `config/build.env.example` to `.local/build.env` and configure `CCT_SIGNING_IDENTITY`. Personal configuration is ignored and excluded from source exports. A configured certificate failure stops the build; it never silently falls back to ad hoc signing. Signing alone does not notarize an app.
 
-Accessibility trust depends on the launch context: a diagnostic executable started in a trusted terminal can report `true` while the app launched from Applications still lacks permission. Use the installed app's **Ready** status to verify that its actual event tap is enabled.
+`--no-build` installs the already signed bundle without recompiling or requesting the signing key again. The installer verifies a staged copy before moving an existing installation to macOS Trash. It refuses a running app, an invalid signature, or a failed process check. On systems without `/usr/bin/trash`, an existing app must first be moved to Trash manually in Finder. A standalone `zsh scripts/install-app.sh` builds once and installs.
 
-`python3 scripts/build-previews.py` creates isolated preview bundles under `.build/GlassPreviews/` for 1, 3, 18, and 50 icons, plus a dark case. It moves any previous generated preview directory to Trash before rebuilding it. These are development artifacts, not launch-at-login items.
+Optional environment settings: `CCT_INSTALL_DIR` changes the destination directory and `CCT_BUNDLE_PATH` changes the prepared bundle path. The bundle identifier is `io.github.corbeusultra.ClearCommandTab`, distinct from the display name. The local pre-publication update preserves saved preferences; macOS may require fresh Accessibility approval after this identity change. See [application identity](docs/APPLICATION_IDENTITY.md).
 
-Native effect reference: [Apple's NSGlassEffectView documentation](https://developer.apple.com/documentation/appkit/nsglasseffectview).
+## First launch and permissions
 
-See [VALIDATION.md](VALIDATION.md) for checks performed on the target Mac and remaining manual scenarios.
+Quit other switchers using the same shortcuts. Open ClearCommandTab, choose **Check permission**, and enable Accessibility through **Grant permission…** if needed. Return to the app and check again. Accessibility should show **Granted** and shortcuts **Active**. Permission and interception failures are reported separately, including while paused. The initial **Not checked** state deliberately hides the Grant action.
 
-`swift run ClearCommandTabChecks` uses an executable test runner because this Mac's Command Line Tools do not contain XCTest. To build two disposable document-free apps for integration tests, run `zsh scripts/build-fixtures.sh`; the bundles are created under `.build/Fixtures/`.
+No Screen Recording permission is requested. The app reads app/window metadata and icons, not window contents, and has no network client or typed-text logging. Accessibility necessarily permits broader system access; enable it only for a build you trust.
 
-## Version 0.4.0 rollback and validation handoff
+If permission stops working after changing signing identity, check that System Settings references the installed app. Re-add only that app if required. A terminal-launched diagnostic cannot prove that the GUI app has permission.
 
-The pre-update sources and installed app are preserved at:
+## Settings and everyday use
 
-`/Users/lucas/Documents/code/all/visible-tab-backups/20261014-191554-before-0.4.0/`
+- **Settings** contains glass appearance, login launch, menu-bar visibility, optional yellow-button Hide, and status. **Guide** describes shortcuts. **About** shows author, version and build separately.
+- **Matte** uses opaque theme-adaptive colors with no glass or blur. The other glass profiles retain their existing rendering.
+- **Yellow button hides app** changes a plain click on another app's yellow button into Hide for the entire app. Modified clicks keep macOS behavior. Its yellow illustration is drawn with AppKit; it is decorative. Pause suspends switching and this optional behavior.
+- Left-click the menu-bar icon to pause/resume. Right-click or Control-click for Settings and Quit. Reopening the app opens Settings even when its icon is hidden. Command-Q quits while a settings tab is active.
+- macOS may separately restrict menu-bar visibility. Use **Menu Bar Settings…** to inspect the system setting; the app cannot read or override that permission.
+- About follows light/dark appearance. The dark artwork uses black arrows on deeper blue; the Finder icon stays original. See [selected artwork and construction](Design/SelectedLogo/README.md).
 
-For a visual rollback, choose **Settings → Glass → Current**; no rebuild or permission renewal is needed. For a full rollback, quit VisibleTab, move the installed bundle to Trash with `/usr/bin/trash -s /Users/lucas/Applications/VisibleTab.app`, then copy the backed-up `VisibleTab.app` to `/Users/lucas/Applications/`. `source/` preserves the complete source before this update.
+`GitHubRepositoryURL` in `Resources/Info.plist` is optional. An empty value displays **GitHub repository — Coming soon**; a valid HTTPS URL enables the link. Version and Build come from the bundle. Build distinguishes constructions of the same version.
 
-During the one-time migration from ad hoc signing, the user renews Accessibility themselves and clicks **Check permission**. Later updates preserve the signing identity and should not require that manipulation. Check the installed app's actual Ready status; terminal diagnostics inherit their launch context and are not proof of the installed app's grant. Any required Settings/authentication remains a manual user handoff.
+## Development and verification
 
-## Version 0.4.1 responsiveness fix
+See [testing](docs/TESTING.md), [measured performance](docs/PERFORMANCE.md), [validation](VALIDATION.md), and [change history](CHANGELOG.md). Private focus/rendering APIs are guarded and may change with macOS; unsupported capabilities retain fallbacks. Fullscreen, Spaces, multiple displays, Secure Input, and login behavior require live checks on the target OS.
 
-The approved glass and panel rendering files are unchanged from 0.4.0. The 150 ms display delay and the per-opening synchronous icon refresh were removed. A headless reproduction of the previous nine-app icon refresh took about 360 ms on warm passes and 854 ms on the first pass; this work now runs off the UI thread and is not started by a shortcut. These are data-preparation measurements, not an end-to-end activation benchmark.
+Window-only switching is currently parked; its implementation is retained for later work. See [parked features](docs/PARKED_FEATURES.md).
 
-Hidden-app commit no longer checks the same cached `isHidden` bit immediately after `unhide()`: an accepted reveal is followed directly by an activation request. Public API activation remains asynchronous; actual focus and perceived timing must be verified with physical keyboard input after renewed permission.
+Create a curated source copy, without Git history, local settings, builds or abandoned designs:
 
-Pre-fix sources and app are backed up in `/Users/lucas/Documents/code/all/visible-tab-backups/20261014-200721-before-0.4.1/`. The installer still leaves permission renewal to the user.
+```sh
+python3 scripts/export-source.py .dist/ClearCommandTab-source
+```
 
-## Version 0.4.2 focus and fast-switching fix
+The exporter refuses an existing destination and writes a SHA-256 manifest. It includes LICENSE and third-party notices. It does not initialize Git, publish, or push. Start the public repository from this export with a new history: the existing development history retains older local paths and author metadata. See [publication privacy and file selection](docs/PUBLISHING.md) before creating a public repository.
 
-The approved glass and panel files are unchanged. The former public activation request could reveal a hidden app without making it keyboard-active. With the user's explicit approval, validated commits now optionally use `GetProcessForPID`, `_SLPSSetFrontProcessWithOptions`, and `SLPSPostEventRecordTo`, resolved at runtime. App mode brings all windows forward; window mode addresses only the selected current-Space window. A targeted down-only key-window record uses a padded zeroed buffer and a point far outside window content; it does not move the pointer or post a matching mouse-up. The native path is followed by AX Raise, without a later public activation call that could change the chosen window. The protocol is informed by [AltTab's native focus wrapper](https://github.com/lwouis/alt-tab-macos/blob/master/src/macos/api-wrappers/SkyLight.framework.swift) and [focus implementation](https://github.com/lwouis/alt-tab-macos/blob/master/src/switcher/state/Window.swift). Private APIs remain optional and can change with macOS.
+## Author
 
-Foreground-app and system Accessibility keyboard focus are independently checked after the request. Window mode additionally checks the exact focused window ID. Only observed focus updates real MRU. Each new selection invalidates previous actions/completions, preserves a short-lived logical origin for rapid switching, and recognizes a previous commit's delayed activation without closing the new panel. Discovery responses started before a focus or foreground transition are discarded and refreshed. A cached focused window belonging to the former foreground app is no longer used after an external app change. App groups still follow app MRU, with window MRU inside each group.
-
-The pre-update source and 0.4.1 app are backed up at `/Users/lucas/Documents/code/all/visible-tab-backups/20261014-204957-before-0.4.2/`. Permission renewal and physical shortcut acceptance remain a manual user handoff. No end-to-end focus or latency result is claimed from model tests or symbol availability alone.
-
-## Version 0.4.3 hidden-app reveal sequencing
-
-A physical-keyboard trace on this Mac confirmed Reminders left Hide and appeared behind iTerm2 while the foreground and system AX focused app remained iTerm2. Its main window was already identifiable while hidden, so a missing window alone did not explain the failure. The old focus path ran immediately after `unhide()` returned, although the SDK defines that result as a successfully sent request, not completed unhide. The trace showed the unhide notification and visible surface arriving after modifier release; it did not capture the old native call's return code, so the exact rejection/override mechanism remains unproven.
-
-Hidden commits now register a one-shot acknowledgement gate before calling `unhide()`. Only the selected app's `NSWorkspace.didUnhideApplicationNotification` releases it, with a later-run-loop `isHidden == false` fast path for an already-revealed app. After that handoff, the app's real main/focused window receives the same user-generated native front/key/Raise operation as Option-Tab. Revealing restores its other windows; no additional bulk-front flag is used for this path. Visible-app Command-Tab and Option-Tab retain their existing modes. If a window was selected for reveal, confirmation requires that exact focused window as well as both foreground and keyboard-focus PIDs.
-
-The gate resumes once, ignores unrelated or duplicate notices, and is discarded on cancellation, superseding selection, or the existing 800 ms deadline. It never schedules a late activation after cancellation. The approved glass and panel files are unchanged. A bounded set of unified-log entries under subsystem `local.lucas.VisibleTab`, category `RevealFocus`, records only hidden-commit stages, native/AX result codes, process/window IDs, cancellation, and confirmation; no key contents, document titles, screenshots, or notification contents are logged. These entries make another failed user test diagnosable without guessing the missing stage.
-
-The 0.4.2 app/source backup is `/Users/lucas/Documents/code/all/visible-tab-backups/20261014-223317-before-0.4.3/`. After installation, the user renews Accessibility themselves before the physical-keyboard acceptance check. Compilation, synchronization tests, and the old-version trace do not establish that the new focus behavior is fixed at runtime.
-
-## Version 0.4.4 observed reveal and stable signing
-
-The 0.4.3 user-test log contained a reveal request followed two milliseconds later by `complete success=false`, with no acknowledgement, native front, key-window, or AX Raise entries. This identifies the early reveal guard as the failed stage, rather than a completed focus request being overridden. The old code aborted when Cocoa's `unhide()` returned false, although the user observed the app reappearing.
-
-Reveal now writes the public application `AXHidden` attribute to false on the focus queue. Actual AX hidden-state observations or the matching unhide notification release the existing one-shot gate. If that attribute is unsupported, Cocoa unhide remains a fallback, but its negative advisory return no longer discards a subsequently observed reveal. A few bounded readiness reads run only for the pending reveal, under the same cancellation/revision checks and 800 ms deadline. No late reactivation retry, document reopening, or restoration of minimized windows is added. Existing visible-app/window paths and the approved rendering are unchanged.
-
-Earlier builds used `codesign --sign -`: their designated requirement was the changing executable code hash. Updates now use the existing valid Apple Development certificate, pinned by public certificate fingerprint in `scripts/sign-app.sh` (override: `VISIBLETAB_SIGNING_IDENTITY`). Private key material is neither exported nor changed. This script refuses the ad hoc pseudo-identity and fails if the configured certificate cannot sign. Default certificate-based requirements remain stable when the program changes. Two separately compiled and signed probe programs had different code hashes and identical designated requirements; the second passed `codesign --verify -R` against the first's requirement. Report: `.build/SigningProbe/report.json`. This validates code-identity continuity, not a live TCC update before the initial migration grant. [Apple's code signing identity guidance](https://developer.apple.com/library/archive/technotes/tn2206/) explains how designated requirements identify updates.
-
-The 0.4.3 source/app backup is `/Users/lucas/Documents/code/all/visible-tab-backups/20261014-231206-before-0.4.4/`. One final manual Accessibility renewal is expected when moving from the old hash-based identity to the certificate-based identity. Future normal updates should preserve permission; this must still be confirmed by the installed app's Ready status after such an update, rather than by a trusted terminal diagnostic.
-
-## Version 0.4.5 switching feedback, quick-flip presentation, and native status menu
-
-A read-only log inspection found accepted native front/key requests followed by timed-out AX reads (including missing window IDs), with some later confirmations and some 800 ms expirations. The previous Boolean completion converted every unconfirmed result into `NSSound.beep()`. Focus results now distinguish confirmed, unverified, and explicitly failed requests. Unverified AX reads/deadlines are quiet and do not invent confirmed history; explicit action failures retain the error signal. Confirmation reads use their own utility queue with 100 ms AX timeouts, while new actions keep their independent user-interactive queue and short timeouts. Cached MRU windows are rechecked against live WindowServer ownership and used for app commits, avoiding a fresh AX main/focused-window lookup in the common path. A last-known app window survives Hide, is removed with its app or on Space invalidation, and must be known non-minimized if not on screen.
-
-Ordinary and hidden-app panels wait 150 ms before first display. Releasing the owning modifier sooner commits immediately with no panel; the delay affects presentation only. A second Tab or arrow navigation displays the panel immediately for deliberate cycling. Window mode keeps immediate display. Generation, held-modifier, and presentation guards prevent an old delayed display from reopening after release/Escape or during a later gesture.
-
-The menu behavior was compared with [KeepingYouAwake's status item controller](https://github.com/newmarcel/KeepingYouAwake/blob/main/Packages/KYAStatusItemUI/Sources/KYAStatusItemUI/KYAStatusItemController.m) and [menu definitions](https://github.com/newmarcel/KeepingYouAwake/blob/main/KeepingYouAwake/KYAMainMenu/KYAMainMenu.m). VisibleTab uses the modern status-item `menu` property rather than KeepingYouAwake's deprecated popup API. It associates the menu only while open, restores left-click toggling on close, keeps the icon highlighted during tracking, removes the Pause / Resume row, and assigns Command-, and Command-Q to explicit VisibleTab targets. Keyboard interception passes through while its menu is tracking. The settings window's separate Pause control remains useful when the icon is hidden.
-
-The certificate-based signer, bundle identifier, and install path remain unchanged. Permission should persist across this update; the actual installed app's Ready state is still the runtime check. Startup/permission status changes emit a concise Lifecycle log for that check without relying on terminal trust. The approved glass and panel rendering files are unchanged. Pre-update source and app are backed up at `/Users/lucas/Documents/code/all/visible-tab-backups/20261015-222956-before-0.4.5/`.
-
-## Version 0.4.6: ClearCommandTab, quick window switching, and settings tabs
-
-The project folder is now `/Users/lucas/Documents/code/all/clear-command-tab`, and the app is `/Users/lucas/Applications/ClearCommandTab.app`. Build products, source modules, menu labels and development commands use ClearCommandTab. Historical backup paths and release notes retain the names used when those snapshots were created. The legacy bundle identifier, preference domain, notification names and certificate-based signing identity are intentionally preserved.
-
-Option-Tab now uses the same 150 ms presentation gate as both app modes. A quick release still commits immediately; further navigation displays immediately. Window ordering and focus paths are unchanged.
-
-Settings uses native toolbar tabs (Settings, Guide, About), following the structure of [KeepingYouAwake's settings window](https://github.com/newmarcel/KeepingYouAwake/blob/main/KeepingYouAwake/Settings/KYASettingsWindow/KYASettingsWindow.m). About reads its version/build from the bundle. The glass choices are renamed fully transparent / original without changing the stored current / altTab values or either effect.
-
-## Version 0.4.7: reliable menu shortcut routing and local Git history
-
-Command-, and Command-Q have an explicit route while the status menu is open. When switching's event tap is active, matching key-downs, repeats and key-ups are consumed, the native menu is cancelled on its tracking run loop, and the requested action runs after menu dismissal. No key is reposted to the foreground app. Outside the menu, those shortcuts remain the foreground app's commands. The native [NSMenuDelegate key-equivalent callback](https://developer.apple.com/documentation/appkit/nsmenudelegate/menuhaskeyequivalent(_:for:target:action:)) also resolves explicit targets, including when switching is paused and its tap is stopped. Character matching follows the current keyboard layout, without a US physical-key assumption.
-
-The earlier failure was reported during right-click menu tracking. A hidden probe confirmed that the current French layout generates a comma and that an inactive native menu can match it. Thus normal character mapping was not the reproduced failure; an explicit menu-scoped routing path addresses the remaining delivery/tracking ambiguity. Actual right-click/physical-key acceptance is still a manual check.
-
-## Version 0.4.8: present Settings after menu tracking and foreground it
-
-A read-only WindowServer snapshot during the reported 0.4.7 failure found the ClearCommandTab Settings window on screen while the app was inactive and Spotify was foreground. This supports a foreground/activation problem rather than a consistently unrecognized shortcut; it does not identify the exact callback order of that past invocation.
-
-Settings requests now wait for NSMenu.didEndTrackingNotification and the default application run-loop mode. menuDidClose only records that the menu closed; it no longer detaches the status menu or starts an action. A small session model retains a native Settings action delivered after the close callback too, and delivers a deferred command only once. After tracking completes, Settings is explicitly ordered in front of other apps through public AppKit APIs. Its key window is reaffirmed on applicationDidBecomeActive, without changing the switcher or its native focus bridge.
-
-Targeted local Settings logs distinguish deferred requests, completed tracking, window visibility/key state and app activation. They contain no typed text or document contents. Actual right-click/Command-, acceptance remains a manual test after installing this version.
-
-## Version 0.4.9: menu bar recovery guidance and Settings Command-Q
-
-The app retains one NSStatusItem when hiding its icon and explicitly sets its isVisible property when Show menu bar icon changes, instead of removing and recreating the item with the same autosaved hidden state. Native visibility is observed through KVO; updates read the current value on the main actor to avoid applying stale hide/show callbacks. These public AppKit observations do not expose macOS's separate per-app Menu Bar permission, so Settings explains that limit and provides a button to the system Menu Bar pane on macOS 26+.
-
-The Settings window handles Command-Q through its normal AppKit key-equivalent dispatch, covering all three tabs without another global keyboard shortcut. Existing switcher rendering, focus and menu shortcuts are unchanged.
-
-
-## Version 0.4.10: Matplotlib artwork for standalone Python
-
-The reproduced `uv` Python process reported a non-null generic document icon through NSRunningApplication, so the previous resolver accepted it and never tried another source. Matplotlib's [native backend](https://github.com/matplotlib/matplotlib/blob/main/src/_macosx.m) sets a runtime application icon; that artwork was not returned by this API for the observed process.
-
-Only Python processes with missing artwork or the exact system document placeholder receive the new fallback. Public libproc mapped-file metadata identifies a loaded `matplotlib/backends/_macosx*.so`; its own package supplies `mpl-data/images/matplotlib.pdf`. Merely installing Matplotlib is insufficient to select its logo. Discovery stops after 8192 regions or a 50 ms budget checked between queries, and runs on the existing utility icon queue. Missing permissions/resources leave the normal fallback intact. No Python code runs, and no environment or process name changes. This recovers the package's standard artwork, not arbitrary custom runtime icons.
-
-Run `zsh scripts/check-application-icons.sh` for headless regression checks. Optional arguments are an already-running Matplotlib PID and its expected artwork path; they enable live read-only verification without launching a figure or posting input.
+Created and maintained by CorbeusUltra with the help of OpenAI Codex.

@@ -1,4 +1,37 @@
-.build/
-.swiftpm/
+# Build products, caches and local diagnostics
+/.build/
+/.swiftpm/
 .DS_Store
 *.app/
+*.dSYM/
+__pycache__/
+*.py[cod]
+*.log
+
+# Personal configuration, private notes, snapshots and prepared exports
+/.local/
+/.dist/
+/AGENTS.md
+/.agents/
+/.codex/
+/.vscode/
+/.idea/
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Signing credentials/certificates and provisioning data
+*.p12
+*.pfx
+*.pem
+*.key
+*.p8
+*.cer
+*.mobileprovision
+*.provisionprofile
+
+# Superseded design experiments; selected artwork remains public
+/Design/LogoProposals/
+/Design/DarkLogoProposals/
+/scripts/make-logo-proposals.swift

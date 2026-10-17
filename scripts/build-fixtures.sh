@@ -4,6 +4,7 @@ task_root="${0:A:h:h}"
 cd "$task_root"
 swift build --product ClearCommandTabFixture
 task_binary_dir="$(swift build --show-bin-path)"
+task_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$task_root/Resources/Info.plist")"
 for task_suffix in A B; do
     task_name="ClearCommandTab Test $task_suffix"
     task_bundle="$task_root/.build/Fixtures/$task_name.app"
@@ -13,7 +14,7 @@ for task_suffix in A B; do
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>local.lucas.VisibleTab.Test$task_suffix</string>
+<key>CFBundleIdentifier</key><string>$task_identifier.Test$task_suffix</string>
 <key>CFBundleName</key><string>$task_name</string>
 <key>CFBundleExecutable</key><string>ClearCommandTabFixture</string>
 <key>CFBundlePackageType</key><string>APPL</string>
