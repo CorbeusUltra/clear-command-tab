@@ -12,6 +12,8 @@ For future commits, configure the Git author name and email you intend to expose
 
 `scripts/export-source.py` can create a history-free source copy for review or distribution. Its allowlist includes source, selected artwork, build/test scripts, example configuration, licence and documentation. It excludes Git history, personal configuration, raw diagnostics, local snapshots and abandoned design proposals. The export includes a SHA-256 manifest; its output under `.dist/` is a local deliverable, not a file to commit. The exporter does not create a remote or push changes.
 
+Run `python3 scripts/export-source.py --check` to validate the selection without creating a copy. To export, run `python3 scripts/export-source.py .dist/ClearCommandTab-source`; the destination must not already exist.
+
 ## What stays local
 
 | Material | Location / pattern | Reason |
