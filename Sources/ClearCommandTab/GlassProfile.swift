@@ -32,7 +32,7 @@ enum GlassProfile: String, CaseIterable {
         switch self {
         case .current: return "fully transparent"
         case .altTab: return "original"
-        case .matte: return "Matte"
+        case .matte: return "matte"
         }
     }
 

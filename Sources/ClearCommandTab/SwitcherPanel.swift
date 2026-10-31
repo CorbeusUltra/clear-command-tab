@@ -18,6 +18,17 @@ struct SwitcherItem {
 @MainActor
 final class SwitcherPanel: NSPanel {
     var onSelect: ((SwitcherTargetID, Bool) -> Void)?
+    var onViewportChanged: (() -> Void)?
+
+    /// Reuse cell geometry: off-screen app artwork is not part of live refresh.
+    var visibleApplicationPIDs: [Int32] {
+        let viewport = scroll.documentVisibleRect
+        var seen: Set<Int32> = []
+        return displayedIDs.compactMap { id in
+            guard let cell = cells[id], cell.frame.intersects(viewport), seen.insert(id.pid).inserted else { return nil }
+            return id.pid
+        }
+    }
     private var surface: NSView
     private var glassProfile = GlassProfile.selected
     private let canvas = NSView()
@@ -78,7 +89,10 @@ final class SwitcherPanel: NSPanel {
         scrollObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.positionCaption() }
+            MainActor.assumeIsolated {
+                self?.positionCaption()
+                self?.onViewportChanged?()
+            }
         }
         setAccessibilityLabel("ClearCommandTab application switcher")
     }

@@ -126,6 +126,21 @@ import ClearCommandTabCore
     commit(second.id, record: second, label: "same-app-window-focus")
     check(NSWorkspace.shared.frontmostApplication?.processIdentifier == a.processIdentifier,
           "Same-app window focus retains the owning app")
+    // Deliberately supply obsolete history. The app's actual last key window must
+    // win, even if the tracker missed every notification of the intervening switch.
+    for index in 0..<6 {
+        let current = index % 2 == 0 ? second : first
+        let stale = index % 2 == 0 ? first : second
+        commit(current.id, record: current, label: "prepare-live-app-window")
+        commit(other.id, record: other, label: "leave-multiwindow-app")
+        commit(.application(a.processIdentifier), record: stale, label: "stale-app-window-cache")
+        let root = AXUIElementCreateApplication(a.processIdentifier)
+        let focused: AXUIElement? = value(root, kAXFocusedWindowAttribute)
+        check(focused.flatMap { WindowIdentity.number($0) } == {
+            if case .window(_, let number) = current.id { return number }; return nil
+        }(), "App return preserves actual last window despite stale history (\(index))")
+    }
+    commit(second.id, record: second, label: "prepare-hidden-reveal-window")
     for _ in 0..<4 {
         _ = a.hide()
         guard wait("Fixture became hidden", until: { a.isHidden }) else { break }

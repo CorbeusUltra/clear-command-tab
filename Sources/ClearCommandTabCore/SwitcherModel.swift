@@ -27,7 +27,9 @@ public struct ApplicationHistory {
     public init(excludedID: Int32, rememberedOrder: [String] = []) {
         self.excludedID = excludedID
         var seen: Set<String> = []
-        self.rememberedOrder = Array(rememberedOrder.filter { seen.insert($0).inserted }.prefix(256))
+        self.rememberedOrder = Array(rememberedOrder.filter {
+            !$0.hasPrefix("pid:") && seen.insert($0).inserted
+        }.prefix(256))
     }
 
     public mutating func update(_ newRecords: [ApplicationRecord]) {
@@ -51,6 +53,7 @@ public struct ApplicationHistory {
         guard let record = records.first(where: { $0.id == id }) else { return }
         order.removeAll { $0 == id }
         order.insert(id, at: 0)
+        guard !record.persistenceID.hasPrefix("pid:") else { return }
         rememberedOrder.removeAll { $0 == record.persistenceID }
         rememberedOrder.insert(record.persistenceID, at: 0)
         rememberedOrder = Array(rememberedOrder.prefix(256))

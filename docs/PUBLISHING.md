@@ -1,12 +1,16 @@
-# Publishing without private development history
+# Publishing and privacy
 
-## Start from the curated export
+## Existing public repository
 
-Use the history-free source export prepared by `scripts/export-source.py` as the public repository's starting folder. Its allowlist includes the source, selected artwork, build/test scripts, example configuration, licence and project documentation. It excludes Git history, personal configuration, raw diagnostics, local snapshots and abandoned design proposals.
+The public repository is [CorbeusUltra/clear-command-tab](https://github.com/CorbeusUltra/clear-command-tab). Updates can be committed and pushed to its existing history after reviewing their contents and commit identity.
 
-The existing development repository deliberately keeps its local history. Older commits contain machine-specific paths, an author identity and a personal signing-certificate identifier. Updating files or adding ignore rules does not remove those records. Do not publish that existing history if these details should remain private. The public repository should start with a new history created from the export. No remote or publication is created by the exporter.
+Older commits are already public and contain machine-specific paths and author metadata. Updating files, changing the Git identity or adding ignore rules does not remove those records. Rewriting history is a separate decision and cannot remove copies or forks outside the repository.
 
-The export includes a SHA-256 manifest for reviewing its contents. The folder and archive under `.dist/` are local deliverables, not files to commit back into the development repository. Before initializing the public repository, configure the Git author name and email you want to expose; use your GitHub-provided no-reply email if desired. The new history's author identity is separate from the application author credit.
+For future commits, configure the Git author name and email you intend to expose; a GitHub-provided no-reply email can protect a personal email address. Review the staged changes before publishing. GitHub account settings can also block certain command-line pushes that expose a private email address.
+
+## Optional curated export
+
+`scripts/export-source.py` can create a history-free source copy for review or distribution. Its allowlist includes source, selected artwork, build/test scripts, example configuration, licence and documentation. It excludes Git history, personal configuration, raw diagnostics, local snapshots and abandoned design proposals. The export includes a SHA-256 manifest; its output under `.dist/` is a local deliverable, not a file to commit. The exporter does not create a remote or push changes.
 
 ## What stays local
 
@@ -18,7 +22,7 @@ The export includes a SHA-256 manifest for reviewing its contents. The folder an
 | Prepared source exports | `.dist/` | Generated deliverables; no need to commit archives or duplicate source trees |
 | Local assistant/editor instructions | `AGENTS.md`, `.agents/`, `.codex/`, `.vscode/`, `.idea/` | Personal development workflow; not required to build the public project |
 | Signing keys/certificates and provisioning files | `*.p12`, `*.pfx`, `*.pem`, `*.key`, `*.p8`, `*.cer`, provisioning profiles | Never bundle personal signing material with source |
-| Superseded logo proposals and their dedicated generator | `Design/LogoProposals/`, `Design/DarkLogoProposals/`, `scripts/make-logo-proposals.swift` | Not secrets; excluded because they are unused design experiments |
+| Superseded logo proposals and their dedicated generator | `Design/LogoProposals/`, `Design/DarkLogoProposals/`, `Design/MonochromeProposal/`, `scripts/make-logo-proposals.swift` | Unused design experiments; local notes may contain personal paths |
 
 The certificate identifier formerly stored in the signing script is not a private key, but identifies a personal development configuration. The current script reads it from ignored configuration. The private signing key remains in the local keychain and is not part of the source export.
 
@@ -26,7 +30,7 @@ The certificate identifier formerly stored in the signing script is not a privat
 
 Keep `Package.swift`, `Sources/`, `Resources/`, `Tests/`, the maintained `scripts/`, `config/build.env.example`, `Design/SelectedLogo/`, README/change/validation documents, and `docs/`. Keep `LICENSE`, `THIRD_PARTY_NOTICES.md` and upstream licence texts. These are required source, reusable project assets or documentation; they are not personal backups.
 
-The current bundle/runtime identifier is `io.github.corbeusultra.ClearCommandTab`, based on the public GitHub handle. The previous identity is kept only in private migration material and earlier private history. The identifier is not a secret or signing credential; see [application identity](APPLICATION_IDENTITY.md). The public GitHub handle and third-party copyright notices also remain.
+The current bundle/runtime identifier is `io.github.corbeusultra.ClearCommandTab`, based on the public GitHub handle. Earlier public history also contains the previous identity. The current identifier is not a secret or signing credential; see [application identity](APPLICATION_IDENTITY.md). The public GitHub handle and third-party copyright notices also remain.
 
 ## Verify the actual commit contents
 

@@ -12,10 +12,7 @@ TREES = ('Sources', 'Resources', 'Tests', 'scripts', 'docs', 'Design/SelectedLog
 EXCLUDED = {'scripts/make-logo-proposals.swift'}
 
 
-def export(destination: Path) -> None:
-    destination = destination.expanduser().absolute()
-    if destination.exists() or destination.is_symlink():
-        raise SystemExit('Destination already exists; choose a new folder.')
+def source_plan():
     candidates = [ROOT / name for name in FILES]
     for name in TREES:
         candidates.extend(path for path in (ROOT / name).rglob('*') if path.is_file())
@@ -36,6 +33,14 @@ def export(destination: Path) -> None:
             continue
         if any(marker in source.read_bytes() for marker in forbidden):
             raise SystemExit(f'Personal path or key marker requires review: {relative}')
+    return selected
+
+
+def export(destination: Path) -> None:
+    destination = destination.expanduser().absolute()
+    if destination.exists() or destination.is_symlink():
+        raise SystemExit('Destination already exists; choose a new folder.')
+    selected = source_plan()
     destination.mkdir(parents=True)
     manifest = []
     for source, relative in selected:
@@ -49,6 +54,9 @@ def export(destination: Path) -> None:
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        raise SystemExit('Usage: python3 scripts/export-source.py NEW_DESTINATION')
-    export(Path(sys.argv[1]))
+    if sys.argv[1:] == ['--check']:
+        print(f'Validated {len(source_plan())} exportable files; no export created.')
+    elif len(sys.argv) == 2 and not sys.argv[1].startswith('--'):
+        export(Path(sys.argv[1]))
+    else:
+        raise SystemExit('Usage: python3 scripts/export-source.py NEW_DESTINATION | --check')

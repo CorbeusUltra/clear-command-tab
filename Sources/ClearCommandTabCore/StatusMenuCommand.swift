@@ -1,7 +1,7 @@
 import Foundation
 
 public enum StatusMenuCommand: Equatable, Sendable {
-    case settings, quit
+    case settings, about, guide, togglePause, quit
 
     /// Character-based matching respects the current keyboard layout. These are
     /// menu shortcuts, never global shortcuts for the foreground application.

@@ -17,19 +17,22 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         self.focus.cancel(reason: "yellow-button")
         let accepted = app.hide()
         Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "YellowButton")
-            .notice("hide request pid=\(pid) accepted=\(accepted)")
+            .debug("hide request pid=\(pid) accepted=\(accepted)")
         if !accepted && !app.isHidden {
+            Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "YellowButton").error("Hide request was rejected")
             self.yellowButtonFailure = "The selected app did not accept Hide. Its windows were not minimized."
             self.updateControls()
         }
     }, onStatus: { [weak self] message in
         guard let self else { return }
         self.yellowButtonFailure = message
-        Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "YellowButton")
-            .notice("mouse interception: \(message ?? "Ready", privacy: .public)")
+        let logger = Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "YellowButton")
+        if let message { logger.notice("mouse interception: \(message, privacy: .public)") }
+        else { logger.debug("mouse interception: Ready") }
         self.updateControls()
     })
-    private let windows = WindowTracker()
+    // Window titles are unused while window-only switching is parked.
+    private let windows = WindowTracker(tracksTitles: false)
     private let focus = FocusCoordinator()
     private let panel = SwitcherPanel()
     private let settings = SettingsWindow()
@@ -51,13 +54,21 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     private var sessionScreen: NSScreen?
     private var hiddenForeground: NSRunningApplication?
     private var statusItem: NSStatusItem?
+    private let menuIcon: NSImage? = {
+        let image = Bundle.main.url(forResource: "ClearCommandTab-menu", withExtension: "png")
+            .flatMap { NSImage(contentsOf: $0) }
+            ?? NSImage(systemSymbolName: "arrow.right.arrow.left", accessibilityDescription: ApplicationIdentity.displayName)
+        image?.size = NSSize(width: 18, height: 18)
+        image?.isTemplate = true
+        image?.accessibilityDescription = ApplicationIdentity.displayName
+        return image
+    }()
     private var statusItemVisibilityObservation: NSKeyValueObservation?
     private var statusMenu: NSMenu?
     private var statusMenuSession = StatusMenuSession()
     private var statusMenuOwnedKeys: Set<UInt16> = []
     private let settingsLog = Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "Settings")
     private var paused = false
-    private var permissionChecked = false
     private var status = ""
     private var reportedStatus: String?
     private var observers: [NSObjectProtocol] = []
@@ -65,6 +76,20 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     private var cachedForegroundScreen: NSScreen?
     private let screenQueue = DispatchQueue(label: ApplicationIdentity.bundleIdentifier + ".screen", qos: .utility)
     private var previewSelection: SwitcherTargetID?
+    private var launchCompleted = false
+    private var pendingSettingsOpen = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(self,
+            andSelector: #selector(openApplication(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kCoreEventClass), andEventID: AEEventID(kAEOpenApplication))
+    }
+
+    @objc private func openApplication(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+        guard !preview, ApplicationLaunch.opensSettings(event) else { return }
+        if launchCompleted { showSettings() }
+        else { pendingSettingsOpen = true }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -101,13 +126,16 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             }
             else { self.reconcileSelection() }
             self.refreshWindows()
-            // Recheck after a trip to System Settings without idle permission polling.
-            if activated && !self.paused && !self.keyboard.isRunning && !self.preview {
+            // An app can terminate without a successor activation notification.
+            // Recover on any lifecycle change, without retaining a stale gesture.
+            if !self.paused && !self.keyboard.isRunning && !self.preview {
+                self.keyboardInputInterrupted()
                 self.checkPermission()
             }
         }
         windows.onChange = { [weak self] in
             guard let self else { return }
+            self.yellowButton.setCandidateRegions(self.windows.minimizeButtonsReady ? self.windows.minimizeButtonRegions : nil)
             if let bounds = self.windows.foregroundBounds { self.cacheForegroundScreen(bounds) }
             guard self.sessionMode == .windows, self.session != nil else { return }
             self.reconcileSelection()
@@ -119,6 +147,10 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             self.session?.select(id)
             if activate { self.finishSelection() }
             else { self.renderSelection() }
+        }
+        panel.onViewportChanged = { [weak self] in
+            guard let self, self.panel.isVisible, self.session != nil else { return }
+            self.tracker.setVisibleIconTargets(self.panel.visibleApplicationPIDs, selected: self.session?.selectedID?.pid)
         }
         settings.onShowIcon = { [weak self] visible in
             UserDefaults.standard.set(visible, forKey: "showMenuBarIcon")
@@ -140,7 +172,6 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             self?.checkPermission()
         }
         settings.onCheckPermission = { [weak self] in
-            self?.permissionChecked = true
             self?.checkPermission()
         }
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(reopenFromNotification),
@@ -177,7 +208,9 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             renderPreview()
         } else {
             checkPermission()
-            if !keyboard.isRunning { showSettings() }
+            launchCompleted = true
+            if pendingSettingsOpen || !keyboard.isRunning { showSettings() }
+            pendingSettingsOpen = false
         }
     }
 
@@ -211,16 +244,24 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     @objc private func reopenFromNotification() { showSettings() }
 
     @objc private func showSettings() {
-        if statusMenuSession.deferCommand(.settings) {
-            settingsLog.notice("request deferred until menu tracking ends")
+        presentSettingsPage(.settings, command: .settings)
+    }
+
+    @objc private func showAbout() { presentSettingsPage(.about, command: .about) }
+    @objc private func showGuide() { presentSettingsPage(.guide, command: .guide) }
+
+    private func presentSettingsPage(_ page: SettingsWindow.Page, command: StatusMenuCommand) {
+        if statusMenuSession.deferCommand(command) {
+            settingsLog.debug("request deferred until menu tracking ends")
             return
         }
         checkPermission()
         updateControls()
         cancelSelection()
+        settings.selectPage(page)
         settings.showWindow(nil)
         if let window = settings.window { settingsFocus.present(window) }
-        settingsLog.notice("present visible=\(self.settings.window?.isVisible == true) key=\(self.settings.window?.isKeyWindow == true) active=\(NSApp.isActive)")
+        settingsLog.debug("present visible=\(self.settings.window?.isVisible == true) key=\(self.settings.window?.isKeyWindow == true) active=\(NSApp.isActive)")
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -250,8 +291,11 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             status = "Could not intercept the keyboard. Command-Tab is handled by macOS. Try Check permission."
         }
         windows.setEnabled(keyboard.isRunning && !paused)
-        yellowButton.setEnabled(!paused && keyboard.isRunning &&
-            UserDefaults.standard.bool(forKey: YellowButtonInterceptor.preferenceKey))
+        let hidesOnYellow = !paused && keyboard.isRunning &&
+            UserDefaults.standard.bool(forKey: YellowButtonInterceptor.preferenceKey)
+        windows.setTracksMinimizeButtons(hidesOnYellow)
+        yellowButton.setCandidateRegions(windows.minimizeButtonsReady ? windows.minimizeButtonRegions : nil)
+        yellowButton.setEnabled(hidesOnYellow)
         if reportedStatus != status {
             Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "Lifecycle").notice("status=\(self.status, privacy: .public)")
             reportedStatus = status
@@ -261,6 +305,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     }
 
     @objc private func togglePause() {
+        if statusMenuSession.deferCommand(.togglePause) { return }
         paused.toggle()
         if paused {
             cancelSelection()
@@ -276,9 +321,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             item.isVisible = visible
             item.behavior.insert(.removalAllowed)
-            let image = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: "ClearCommandTab")
-            image?.isTemplate = true
-            item.button?.image = image
+            item.button?.image = menuIcon
             let menu = NSMenu()
             menu.delegate = self
             NotificationCenter.default.addObserver(self, selector: #selector(statusMenuTrackingEnded),
@@ -287,35 +330,47 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
             state.tag = 1
             menu.addItem(state)
             menu.addItem(.separator())
+            let pause = NSMenuItem(title: "Pause", action: #selector(togglePause), keyEquivalent: "")
+            pause.target = self
+            pause.tag = 2
+            menu.addItem(pause)
+            menu.addItem(.separator())
             let preferences = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
             preferences.target = self
             preferences.keyEquivalentModifierMask = .command
             menu.addItem(preferences)
+            let guide = NSMenuItem(title: "Guide", action: #selector(showGuide), keyEquivalent: "")
+            guide.target = self
+            menu.addItem(guide)
+            let about = NSMenuItem(title: "About", action: #selector(showAbout), keyEquivalent: "")
+            about.target = self
+            menu.addItem(about)
             menu.addItem(.separator())
-            let quit = NSMenuItem(title: preview ? "Quit Preview" : "Quit ClearCommandTab",
+            let quit = NSMenuItem(title: preview ? "Quit Preview" : "Quit \(ApplicationIdentity.displayName)",
                                   action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             quit.target = NSApp
             quit.keyEquivalentModifierMask = .command
             menu.addItem(quit)
             statusMenu = menu
-            item.button?.target = self
-            item.button?.action = #selector(statusItemClicked)
-            item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            // Let AppKit own ordinary status-item clicks and menu tracking.
+            item.menu = menu
             statusItem = item
             statusItemVisibilityObservation = item.observe(\.isVisible, options: [.new]) { [weak self] observed, _ in
                 let itemID = ObjectIdentifier(observed)
                 Task { @MainActor [weak self] in self?.statusItemVisibilityChanged(itemID) }
             }
         }
-        statusItem?.button?.toolTip = "ClearCommandTab — \(status)\nClick to \(paused ? "resume" : "pause"); right-click for Settings and Quit."
-        let symbol = (!paused && !preview && !keyboard.isRunning) ? "exclamationmark.circle" : "arrow.left.arrow.right"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: paused ? "ClearCommandTab paused" : "ClearCommandTab enabled")
+        statusItem?.button?.toolTip = "\(ApplicationIdentity.displayName) — \(status)\nClick to open the menu."
+        let image = (!paused && !preview && !keyboard.isRunning)
+            ? NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: "\(ApplicationIdentity.displayName) unavailable")
+            : menuIcon
         image?.isTemplate = true
         statusItem?.button?.image = image
         statusItem?.button?.appearsDisabled = paused || (!preview && !keyboard.isRunning)
         let trusted = !preview && AXIsProcessTrusted()
         statusMenu?.item(withTag: 1)?.title = paused ? "Paused" : keyboard.isRunning ? "Ready"
             : trusted ? "Shortcuts unavailable" : "Permission required"
+        statusMenu?.item(withTag: 2)?.title = paused ? "Resume" : "Pause"
         let hidesOnYellow = UserDefaults.standard.bool(forKey: YellowButtonInterceptor.preferenceKey)
         var limitations: [String] = []
         if keyboard.isRunning {
@@ -324,7 +379,9 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         } else if trusted {
             limitations.append("Could not start keyboard interception. Click Check permission to retry.")
         }
-        let settingsStatus = SettingsStatus(permissionChecked: permissionChecked, accessibilityGranted: trusted,
+        // The query above is already a current permission check. macOS retains
+        // the grant; no manual-click flag or persisted boolean should hide it.
+        let settingsStatus = SettingsStatus(permissionChecked: !preview, accessibilityGranted: trusted,
             keyboardRunning: keyboard.isRunning, paused: paused, preview: preview,
             detail: limitations.isEmpty ? nil : limitations.joined(separator: " "),
             yellowButtonFailure: hidesOnYellow ? yellowButtonFailure : nil)
@@ -343,22 +400,10 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         updateControls()
     }
 
-    @objc private func statusItemClicked() {
-        guard let event = NSApp.currentEvent else { return }
-        if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
-            if let item = statusItem, let button = item.button, let menu = statusMenu {
-                // Associate the actual status-item menu while tracking, so AppKit
-                // owns highlighting, positioning, dismissal, and key equivalents.
-                item.menu = menu
-                statusMenuSession.beginTracking()
-                button.performClick(nil)
-            }
-        } else { togglePause() }
-    }
-
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusMenu else { return }
         settingsFocus.cancel()
+        statusMenuSession.beginTracking()
         statusMenuSession.menuWillOpen()
         cancelSelection()
         statusItem?.button?.highlight(true)
@@ -368,7 +413,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         guard menu === statusMenu else { return }
         statusMenuSession.menuDidClose()
         statusItem?.button?.highlight(false)
-        settingsLog.notice("menu closed; tracking completion still pending")
+        settingsLog.debug("menu closed; tracking completion still pending")
     }
 
     @objc private func statusMenuTrackingEnded(_ notification: Notification) {
@@ -385,13 +430,12 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         guard let menu = statusMenu, ObjectIdentifier(menu) == menuID,
               statusMenuSession.isTracking, !statusMenuSession.isOpen else { return }
         let command = statusMenuSession.finishTracking()
-        statusItem?.menu = nil
-        statusItem?.button?.target = self
-        statusItem?.button?.action = #selector(statusItemClicked)
-        statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        settingsLog.notice("menu tracking finished pending=\(command == .settings ? "settings" : command == .quit ? "quit" : "none", privacy: .public)")
+        settingsLog.debug("menu tracking finished pending=\(command.map { String(describing: $0) } ?? "none", privacy: .public)")
         switch command {
         case .settings: showSettings()
+        case .about: showAbout()
+        case .guide: showGuide()
+        case .togglePause: togglePause()
         case .quit: NSApp.terminate(nil)
         case nil: break
         }
@@ -409,6 +453,9 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
                     modifiers: modifiers(CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue)))) else { return false }
         switch command {
         case .settings: target.pointee = self; action.pointee = #selector(showSettings)
+        case .about: target.pointee = self; action.pointee = #selector(showAbout)
+        case .guide: target.pointee = self; action.pointee = #selector(showGuide)
+        case .togglePause: target.pointee = self; action.pointee = #selector(togglePause)
         case .quit: target.pointee = NSApp; action.pointee = #selector(NSApplication.terminate(_:))
         }
         return true
@@ -433,6 +480,8 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         ownership.reset()
         statusMenuOwnedKeys.removeAll()
     }
+
+    func keyboardRecovered() { checkPermission() }
 
     private func modifiers(_ flags: CGEventFlags) -> ShortcutModifiers {
         var result: ShortcutModifiers = []
@@ -461,7 +510,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
                     modifiers: modifiers(event.flags)), let menu = statusMenu else { return false }
             statusMenuOwnedKeys.insert(key)
             if statusMenuSession.deferCommand(command) {
-                settingsLog.notice("menu command queued action=\(command == .settings ? "settings" : "quit", privacy: .public)")
+                settingsLog.debug("menu command queued action=\(command == .settings ? "settings" : "quit", privacy: .public)")
                 // Do not reenter AppKit menu tracking from the event-tap callback.
                 // Common modes also run while the native menu is tracking.
                 CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
@@ -552,6 +601,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     }
 
     private func beginSelection(mode: SwitcherMode, backwards: Bool) {
+        tracker.pruneTerminatedApplications()
         settingsFocus.cancel()
         selectionOrigin = focus.beginSelection()
         selectionGeneration += 1
@@ -582,6 +632,8 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         sessionWatchdog = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, let mode = self.sessionMode else { return }
+                self.tracker.pruneTerminatedApplications()
+                guard self.sessionMode == mode else { return }
                 if IsSecureEventInputEnabled() { self.keyboardInputInterrupted() }
                 else if !mode.isHeld(by: self.heldModifiers) { self.finishSelection() }
             }
@@ -639,6 +691,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
         }
         panel.applyGlassProfile(GlassProfile.selected)
         panel.display(items: items, selected: session.selectedID, screen: screen)
+        tracker.setVisibleIconTargets(panel.visibleApplicationPIDs, selected: session.selectedID?.pid)
     }
 
     private func refreshBadges() {
@@ -657,6 +710,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     }
 
     private func finishSelection() {
+        tracker.pruneTerminatedApplications()
         if session == nil, pendingWindowAdvances != nil {
             // Never turn a quick release into a delayed activation after cold discovery.
             cancelSelection()
@@ -679,6 +733,7 @@ final class AppController: NSObject, NSApplicationDelegate, KeyboardTapDelegate,
     }
 
     private func dismissSelection() {
+        tracker.setVisibleIconTargets([], selected: nil)
         presentation.cancel()
         selectionGeneration += 1
         displayWork?.cancel()

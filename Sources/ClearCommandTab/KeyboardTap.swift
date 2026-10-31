@@ -1,5 +1,7 @@
 import AppKit
 import Carbon
+import os
+import ClearCommandTabCore
 
 @MainActor
 protocol KeyboardTapDelegate: AnyObject {
@@ -7,6 +9,7 @@ protocol KeyboardTapDelegate: AnyObject {
     func keyboardUnavailable(_ reason: String)
     func cancelSelection()
     func keyboardInputInterrupted()
+    func keyboardRecovered()
 }
 
 private let keyboardCallback: CGEventTapCallBack = { _, type, event, context in
@@ -22,6 +25,11 @@ final class KeyboardTap {
     weak var delegate: KeyboardTapDelegate?
     private var port: CFMachPort?
     private var source: CFRunLoopSource?
+    private var recoveryTimer: Timer?
+    #if KEYBOARD_RECOVERY_CHECKS
+    private var omitDisabledCallbackForCheck = false
+    #endif
+    private let log = Logger(subsystem: ApplicationIdentity.bundleIdentifier, category: "KeyboardTap")
     var isRunning: Bool { port.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
 
     func start() -> Bool {
@@ -39,10 +47,21 @@ final class KeyboardTap {
         source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         if let source { CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes) }
         CGEvent.tapEnable(tap: tap, enable: true)
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isRunning else { return }
+                self.recoverDisabledTap()
+            }
+        }
+        timer.tolerance = 0.2
+        recoveryTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
         return isRunning
     }
 
     func stop() {
+        recoveryTimer?.invalidate()
+        recoveryTimer = nil
         if let port { CGEvent.tapEnable(tap: port, enable: false) }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let port { CFMachPortInvalidate(port) }
@@ -52,11 +71,14 @@ final class KeyboardTap {
 
     fileprivate func receive(type: CGEventType, event: CGEvent) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            delegate?.keyboardInputInterrupted()
-            if AXIsProcessTrusted(), let port {
-                CGEvent.tapEnable(tap: port, enable: true)
+            #if KEYBOARD_RECOVERY_CHECKS
+            if type == .tapDisabledByUserInput, omitDisabledCallbackForCheck {
+                omitDisabledCallbackForCheck = false
+                return false
             }
-            if !isRunning { delegate?.keyboardUnavailable("Keyboard interception stopped. Recheck Accessibility permission.") }
+            #endif
+            log.notice("event tap disabled reason=\(type == .tapDisabledByTimeout ? "timeout" : "user-input", privacy: .public)")
+            recoverDisabledTap(recreate: false)
             return false
         }
         guard AXIsProcessTrusted() else {
@@ -71,4 +93,33 @@ final class KeyboardTap {
         }
         return delegate?.handleKey(type: type, event: event) ?? false
     }
+
+    private func recoverDisabledTap(recreate: Bool = true) {
+        delegate?.keyboardInputInterrupted()
+        guard AXIsProcessTrusted() else {
+            stop()
+            delegate?.keyboardUnavailable("Accessibility permission is required. Command-Tab is handled by macOS.")
+            return
+        }
+        if let port, CFMachPortIsValid(port) { CGEvent.tapEnable(tap: port, enable: true) }
+        if !isRunning && recreate { _ = start() }
+        if isRunning {
+            log.notice("event tap recovered")
+            delegate?.keyboardRecovered()
+        } else {
+            log.error("event tap recovery failed")
+            delegate?.keyboardUnavailable("Keyboard interception stopped. Click Check permission to retry.")
+        }
+    }
+
+    #if KEYBOARD_RECOVERY_CHECKS
+    // Compiled only by the hidden native check host; no input is posted.
+    func disableWithoutCallbackForCheck() {
+        omitDisabledCallbackForCheck = true
+        if let port { CGEvent.tapEnable(tap: port, enable: false) }
+    }
+    func deliverTimeoutForCheck() {
+        if let event = CGEvent(source: nil) { _ = receive(type: .tapDisabledByTimeout, event: event) }
+    }
+    #endif
 }

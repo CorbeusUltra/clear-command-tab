@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import ClearCommandTabCore
 
 // Three layers: pure status decisions, AppKit interactions/layout, optional render QA.
@@ -13,7 +14,10 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
 func checkStatusDecisions() {
     let unchecked = SettingsStatus(permissionChecked: false, accessibilityGranted: false, keyboardRunning: false, paused: false)
     check(unchecked.accessibility == .notChecked && !unchecked.showsGrantPermission,
-          "A background check must not expose Grant permission before the user's check")
+          "Before any permission result, the view must not assume a grant or a denial")
+    let ready = SettingsStatus(permissionChecked: true, accessibilityGranted: true, keyboardRunning: true, paused: false)
+    check(ready.accessibility == .granted && ready.switching == .active && !ready.showsGrantPermission,
+          "An automatic successful permission query must immediately display Granted and Active")
     let denied = SettingsStatus(permissionChecked: true, accessibilityGranted: false, keyboardRunning: false, paused: false)
     check(denied.accessibility == .notGranted && denied.showsGrantPermission, "A denied explicit check must offer Grant permission")
     let tapFailure = SettingsStatus(permissionChecked: true, accessibilityGranted: true, keyboardRunning: false, paused: false)
@@ -32,6 +36,23 @@ func checkStatusDecisions() {
 }
 checkStatusDecisions()
 
+func checkLaunchRequests() {
+    func event(origin: AEKeyword? = nil, id: AEEventID = AEEventID(kAEOpenApplication)) -> NSAppleEventDescriptor {
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass), eventID: id,
+            targetDescriptor: nil, returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
+        if let origin { event.setParam(NSAppleEventDescriptor(enumCode: origin), forKeyword: AEKeyword(keyAEPropData)) }
+        return event
+    }
+    check(ApplicationLaunch.opensSettings(event()), "A single explicit cold open must request Settings")
+    check(!ApplicationLaunch.opensSettings(event(origin: AEKeyword(keyAELaunchedAsLogInItem))),
+          "Login launch must not open Settings")
+    check(!ApplicationLaunch.opensSettings(event(origin: AEKeyword(keyAELaunchedAsServiceItem))),
+          "Background service launch must not open Settings")
+    check(!ApplicationLaunch.opensSettings(event(id: AEEventID(kAEQuitApplication))),
+          "Unrelated Apple events must not open Settings")
+}
+checkLaunchRequests()
+
 MainActor.assumeIsolated {
     let app = NSApplication.shared
     app.setActivationPolicy(.prohibited)
@@ -39,7 +60,10 @@ MainActor.assumeIsolated {
     let info = (NSDictionary(contentsOf: root.appendingPathComponent("Resources/Info.plist")) as? [String: Any]) ?? [:]
     check(info["CFBundleIdentifier"] as? String == ApplicationIdentity.bundleIdentifier,
           "Bundle metadata must match the identity used by relaunch notifications and runtime services")
-    if let icon = NSImage(contentsOf: root.appendingPathComponent(".build/ClearCommandTab.app/Contents/Resources/ClearCommandTab.icns")) {
+    check(["CFBundleName", "CFBundleDisplayName", "CFBundleExecutable"].allSatisfy {
+        info[$0] as? String == ApplicationIdentity.displayName
+    }, "Public bundle, executable and interface names must agree while the bundle identity remains stable")
+    if let icon = NSImage(contentsOf: root.appendingPathComponent(".build/ClearCmdTab.app/Contents/Resources/ClearCommandTab.icns")) {
         app.applicationIconImage = icon
     }
     let logoDirectory = root.appendingPathComponent("Design/SelectedLogo")
@@ -50,11 +74,20 @@ MainActor.assumeIsolated {
     }
     let darkArrow = darkBitmap.colorAt(x: 88, y: 63)!.usingColorSpace(.deviceRGB)!
     let lightArrow = lightBitmap.colorAt(x: 88, y: 63)!.usingColorSpace(.deviceRGB)!
-    check(darkArrow.redComponent < 0.01 && darkArrow.greenComponent < 0.01 && darkArrow.blueComponent < 0.01,
-          "The selected dark logo must have black arrows")
-    check(lightArrow.redComponent > 0.99 && lightArrow.greenComponent > 0.99 && lightArrow.blueComponent > 0.99,
-          "The original light logo must retain white arrows")
-    let settings = SettingsWindow(info: info, darkIcon: darkArtwork)
+    check(darkArrow.redComponent > 0.99 && darkArrow.greenComponent > 0.99 && darkArrow.blueComponent > 0.99,
+          "The selected dark logo must have white arrows")
+    check(lightArrow.redComponent < 0.01 && lightArrow.greenComponent < 0.01 && lightArrow.blueComponent < 0.01,
+          "The selected light logo must have black arrows")
+    let resourcePath = [".build/ClearCmdTab.app", ".build/ClearCommandTab.app"]
+        .map { root.appendingPathComponent($0) }.first { FileManager.default.fileExists(atPath: $0.path) }!
+    let resources = Bundle(url: resourcePath)!
+    let cachedBlueIcon = NSImage(size: NSSize(width: 176, height: 176), flipped: false) { rect in
+        NSColor.blue.setFill()
+        rect.fill()
+        return true
+    }
+    app.applicationIconImage = cachedBlueIcon
+    let settings = SettingsWindow(info: info, darkIcon: darkArtwork, resourceBundle: resources)
     guard let window = settings.window, let tabs = window.contentViewController as? NSTabViewController else {
         fatalError("Missing Settings window/tabs")
     }
@@ -71,6 +104,65 @@ MainActor.assumeIsolated {
     let checkButton = control("checkPermission", as: NSButton.self)
     let glass = control("glassChoice", as: NSPopUpButton.self)
     let screen = NSRect(x: 0, y: 0, width: 1600, height: 1200)
+    let quit = control("quitApplication", as: NSButton.self)
+    check((quit.superview as? NSStackView)?.arrangedSubviews.last === quit,
+          "Quit must be the final control at the bottom of Settings")
+    let appWindow = window as! SettingsAppWindow
+    var quitRequests = 0
+    appWindow.onQuit = { quitRequests += 1 }
+    quit.performClick(nil)
+    check(quitRequests == 1, "The actual Quit button must request application termination")
+    for page in [SettingsWindow.Page.settings, .guide, .about] {
+        settings.selectPage(page)
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "q",
+            charactersIgnoringModifiers: "q", isARepeat: false, keyCode: 12)!
+        let before = quitRequests
+        check(window.performKeyEquivalent(with: event) && quitRequests == before + 1,
+              "Command-Q must request Quit exactly once in \(page)")
+    }
+    let beforeUnrelatedKeys = quitRequests
+    for modifiers: NSEvent.ModifierFlags in [[], [.command, .shift], [.command, .option]] {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "q",
+            charactersIgnoringModifiers: "q", isARepeat: false, keyCode: 12)!
+        _ = window.performKeyEquivalent(with: event)
+    }
+    check(quitRequests == beforeUnrelatedKeys, "Plain Q and modified Command-Q must not quit")
+    var closes = 0
+    settings.onClose = { closes += 1 }
+    let quitsBeforeClose = quitRequests
+    for page in [SettingsWindow.Page.settings, .guide, .about] {
+        // Each hidden fixture can close once. Closing an already closed window
+        // correctly emits no second native notification; reopening is a GUI test.
+        let closing = SettingsWindow(info: info, darkIcon: darkArtwork, resourceBundle: resources)
+        closing.selectPage(page)
+        closing.onClose = { closes += 1 }
+        let closeWindow = closing.window as! SettingsAppWindow
+        closeWindow.onQuit = { quitRequests += 1 }
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: 0, windowNumber: closeWindow.windowNumber, context: nil, characters: "w",
+            charactersIgnoringModifiers: "w", isARepeat: false, keyCode: 13)!
+        let before = closes
+        check(closeWindow.performKeyEquivalent(with: event) && closes == before + 1,
+              "Command-W must follow the native close/delegate path exactly once in \(page)")
+        check(quitRequests == quitsBeforeClose && closing.window === closeWindow && !closeWindow.isVisible,
+              "Command-W keeps the service and reusable settings controller alive in \(page)")
+    }
+    let redButtonFixture = SettingsWindow(info: info, darkIcon: darkArtwork, resourceBundle: resources)
+    redButtonFixture.onClose = { closes += 1 }
+    (redButtonFixture.window as! SettingsAppWindow).onQuit = { quitRequests += 1 }
+    let beforeRedButton = closes
+    redButtonFixture.window!.standardWindowButton(.closeButton)!.performClick(nil)
+    check(closes == beforeRedButton + 1 && quitRequests == quitsBeforeClose,
+          "The red close button and Command-W use the same close callback without quitting")
+    for (page, title) in [(SettingsWindow.Page.about, "About"), (.guide, "Guide"), (.settings, "Settings"), (.about, "About")] {
+        settings.selectPage(page)
+        check(tabs.tabViewItems[tabs.selectedTabViewItemIndex].label == title,
+              "Direct page route must select \(title), regardless of previous tab")
+        check(!window.isVisible, "Selecting a page must not show a window before menu tracking ends")
+    }
+    settings.selectPage(.settings)
     @MainActor func select(_ index: Int) -> CGFloat {
         tabs.selectedTabViewItemIndex = index
         settings.fitSelectedPage(visibleFrame: screen)
@@ -110,6 +202,19 @@ MainActor.assumeIsolated {
     check(permission.stringValue == "Not granted" && !grant.isHidden, "Paused permission loss must update the UI")
     update()
 
+    let pause = tabs.tabViewItems.compactMap { $0.viewController?.view }
+        .flatMap(descendants).compactMap { $0 as? NSButton }.first { $0.title == "Pause" }!
+    var settingsPaused = false
+    settings.onTogglePause = {
+        settingsPaused.toggle()
+        update(running: !settingsPaused, paused: settingsPaused)
+    }
+    pause.performClick(nil)
+    check(settingsPaused && pause.title == "Resume" && control("switchingStatus", as: NSTextField.self).stringValue == "Status: Inactive",
+          "Settings must retain a functioning Pause action after adding the menu action")
+    pause.performClick(nil)
+    check(!settingsPaused && pause.title == "Pause", "Settings Resume must restore the normal action")
+
     // Preference compatibility and selection callbacks with no writes to real user defaults.
     let preferences = UserDefaults(suiteName: "local.ClearCommandTab.Checks.\(UUID().uuidString)")!
     for (stored, expected) in [("current", GlassProfile.current), ("altTab", .altTab), ("matte", .matte)] {
@@ -119,9 +224,9 @@ MainActor.assumeIsolated {
     settings.onGlassProfile = { selected in
         preferences.setVolatileDomain([GlassProfile.preferenceKey: selected.rawValue], forName: UserDefaults.argumentDomain)
     }
-    glass.selectItem(withTitle: "Matte")
+    glass.selectItem(withTitle: "matte")
     glass.sendAction(glass.action!, to: glass.target)
-    check(GlassProfile.selected(in: preferences) == .matte && glass.titleOfSelectedItem == "Matte",
+    check(GlassProfile.selected(in: preferences) == .matte && glass.titleOfSelectedItem == "matte",
           "The actual popup must emit a restorable Matte preference")
     preferences.setVolatileDomain([GlassProfile.preferenceKey: "unknown"], forName: UserDefaults.argumentDomain)
     check(GlassProfile.selected(in: preferences) == .current, "Unknown stored profiles must keep the existing fallback")
@@ -185,17 +290,51 @@ MainActor.assumeIsolated {
     let aboutIcon = control("aboutIcon", as: NSImageView.self)
     window.appearance = NSAppearance(named: .aqua)
     let originalIcon = aboutIcon.image
+    let aquaAppearance = NSAppearance(named: .aqua)!, darkAppearance = NSAppearance(named: .darkAqua)!
+    var expectedLight: NSImage?, expectedDark: NSImage?
+    aquaAppearance.performAsCurrentDrawingAppearance { expectedLight = app.applicationIconImage }
+    check(ApplicationIcon.samePixels(ApplicationIcon.rasterize(originalIcon, appearance: aquaAppearance),
+                                    ApplicationIcon.rasterize(expectedLight, appearance: aquaAppearance)),
+          "About uses the public system application image, including AppKit's treatment of a custom icon")
     window.appearance = NSAppearance(named: .darkAqua)
-    check(aboutIcon.image === darkArtwork, "About must switch to the black-arrow icon when its window becomes dark")
+    darkAppearance.performAsCurrentDrawingAppearance { expectedDark = app.applicationIconImage }
+    check(ApplicationIcon.samePixels(ApplicationIcon.rasterize(aboutIcon.image, appearance: darkAppearance),
+                                    ApplicationIcon.rasterize(expectedDark, appearance: darkAppearance)),
+          "A dark window must use AppKit's native result rather than forcing a bundled dark bitmap")
     window.appearance = NSAppearance(named: .aqua)
-    check(aboutIcon.image === originalIcon, "About must restore the original icon when returning to light appearance")
-    let fallbackIcon = AppearanceIconView(light: originalIcon!, dark: nil)
+    check(ApplicationIcon.samePixels(ApplicationIcon.rasterize(aboutIcon.image, appearance: aquaAppearance),
+                                    ApplicationIcon.rasterize(expectedLight, appearance: aquaAppearance)),
+          "About restores AppKit's native result after appearance changes")
+    let lightResource = NSImage(contentsOf: resources.url(forResource: "ClearCommandTab", withExtension: "icns")!)!
+    let fallbackIcon = AppearanceIconView(light: lightResource, dark: darkArtwork, systemIcon: { nil })
     fallbackIcon.appearance = NSAppearance(named: .darkAqua)
-    check(fallbackIcon.image === originalIcon, "A missing dark resource must retain the original icon")
-    check(control("repositoryPlaceholder", as: NSTextField.self).stringValue.contains("Coming soon"), "Unconfigured GitHub must be a text placeholder")
+    check(fallbackIcon.image === darkArtwork, "Missing system artwork falls back to the bundled dark resource")
+    fallbackIcon.appearance = NSAppearance(named: .aqua)
+    check(fallbackIcon.image === lightResource, "Fallback follows the window appearance and restores light artwork")
+    let missingDark = AppearanceIconView(light: lightResource, dark: nil, systemIcon: { nil })
+    missingDark.appearance = NSAppearance(named: .darkAqua)
+    check(missingDark.image === lightResource, "A missing dark fallback retains valid light artwork")
+    var currentNative: NSImage? = originalIcon
+    let refreshed = AppearanceIconView(light: lightResource, dark: darkArtwork, systemIcon: { currentNative })
+    currentNative = darkArtwork
+    refreshed.refreshImage()
+    check(refreshed.image === darkArtwork, "Refreshing About reads a changed native application image")
+    let unconfigured = SettingsWindow(info: [:])
+    let unconfiguredTabs = unconfigured.window!.contentViewController as! NSTabViewController
+    check(descendants(unconfiguredTabs.tabViewItems[2].viewController!.view).contains {
+        $0.identifier?.rawValue == "repositoryLink" && ($0 as? NSButton)?.isEnabled == false
+    }, "Unconfigured GitHub must retain a disabled repository row")
+    check(control("repositoryLink", as: NSButton.self).isEnabled,
+          "The bundled public repository must appear as an enabled About link")
     let aboutLabels = descendants(tabs.tabViewItems[2].viewController!.view).compactMap { ($0 as? NSTextField)?.stringValue }
-    check(aboutLabels.contains("Version \(info["CFBundleShortVersionString"] ?? "Development")") &&
-          aboutLabels.contains("Build \(info["CFBundleVersion"] ?? "")"), "Version and build must be separate labels from bundle metadata")
+    check(aboutLabels.contains("Version \(info["CFBundleShortVersionString"] ?? "Development") (\(info["CFBundleVersion"] ?? ""))") &&
+          !aboutLabels.contains(where: { $0.hasPrefix("Build ") }), "Version and build share one line with parenthesized build metadata")
+    check(aboutLabels.contains("Free, open-source, native macOS app.\nSwitch between visible apps with Command-Tab.") &&
+          !aboutLabels.contains("Runs locally. No accounts or analytics."), "About contains the requested concise ordered description without an extra footer")
+    check(aboutLabels.contains(ApplicationIdentity.displayName) && window.title == "\(ApplicationIdentity.displayName) Settings",
+          "The new public app name is consistent in About and the window title")
+    check((control("repositoryLink", as: NSButton.self).superview as? NSStackView)?.arrangedSubviews.count == 6,
+          "About contains only icon, name, version/build, description, author and repository")
     let linked = SettingsWindow(info: ["GitHubRepositoryURL": "https://github.com/example/clear-command-tab"])
     let linkedTabs = linked.window!.contentViewController as! NSTabViewController
     check(descendants(linkedTabs.tabViewItems[2].viewController!.view).contains {
@@ -204,7 +343,7 @@ MainActor.assumeIsolated {
     let invalid = SettingsWindow(info: ["GitHubRepositoryURL": "file:///tmp/repository"])
     let invalidTabs = invalid.window!.contentViewController as! NSTabViewController
     check(descendants(invalidTabs.tabViewItems[2].viewController!.view).contains {
-        $0.identifier?.rawValue == "repositoryPlaceholder"
+        $0.identifier?.rawValue == "repositoryLink" && ($0 as? NSButton)?.isEnabled == false
     }, "Invalid repository metadata must not become a clickable link")
 
     // Exercise material replacement on the real hidden panel, including its selection.
@@ -212,6 +351,8 @@ MainActor.assumeIsolated {
     let items = (1...3).map { SwitcherItem(id: .application(Int32($0)), name: "Application \($0)", icon: nil) }
     if let display = NSScreen.main {
         check(panel.prepare(items: items, selected: items[1].id, screen: display), "Panel content must prepare without presentation")
+        check(Set(panel.visibleApplicationPIDs) == Set(items.map(\.id.pid)),
+              "Compact panel exposes only the actual visible app IDs for live refresh")
         let originalSize = panel.frame.size
         for profile in [GlassProfile.matte, .current, .altTab, .matte] {
             panel.applyGlassProfile(profile)
@@ -228,6 +369,14 @@ MainActor.assumeIsolated {
 
     // User-visible updates with stable IDs must survive the cached-navigation path.
     if let display = NSScreen.main {
+        let dense = (1...100).map { SwitcherItem(id: .application(Int32($0)), name: "Fixture \($0)", icon: nil) }
+        panel.prepare(items: dense, selected: dense[0].id, screen: display)
+        let leftViewport = panel.visibleApplicationPIDs
+        panel.prepare(items: dense, selected: dense[99].id, screen: display)
+        check(leftViewport.count < dense.count && leftViewport.contains(1) && !leftViewport.contains(100),
+              "Dense panel does not poll artwork beyond its visible viewport")
+        check(panel.visibleApplicationPIDs.contains(100) && !panel.visibleApplicationPIDs.contains(1),
+              "Scrolling updates the live icon targets to the newly visible app set")
         var edited = items
         edited[1] = SwitcherItem(id: items[1].id, name: "Renamed fixture", icon: nil,
             badge: "9", windowTitle: "Edited document")
@@ -280,7 +429,7 @@ MainActor.assumeIsolated {
         }
         print("Rendered hidden AppKit views to \(directory.path)")
     }
-    check(!window.isVisible && !linked.window!.isVisible && !invalid.window!.isVisible, "Checks must never show a window")
+    check(!window.isVisible && !linked.window!.isVisible && !invalid.window!.isVisible && !unconfigured.window!.isVisible, "Checks must never show a window")
 }
 
 @MainActor func render(_ window: NSWindow, to url: URL) {

@@ -31,7 +31,8 @@ if CommandLine.arguments.contains("--diagnostics") {
     let bundleID = Bundle.main.bundleIdentifier
     let otherInstance = bundleID.flatMap { id in
         NSRunningApplication.runningApplications(withBundleIdentifier: id).first {
-            $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && !$0.isTerminated
+            $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && !$0.isTerminated &&
+                ApplicationTracker.processIsRunning($0.processIdentifier)
         }
     }
     if otherInstance != nil {

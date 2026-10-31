@@ -3,15 +3,15 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key><string>io.github.corbeusultra.ClearCommandTab</string>
-    <key>CFBundleName</key><string>ClearCommandTab</string>
-    <key>CFBundleDisplayName</key><string>ClearCommandTab</string>
-    <key>CFBundleExecutable</key><string>ClearCommandTab</string>
+    <key>CFBundleName</key><string>ClearCmdTab</string>
+    <key>CFBundleDisplayName</key><string>ClearCmdTab</string>
+    <key>CFBundleExecutable</key><string>ClearCmdTab</string>
     <key>CFBundleIconFile</key><string>ClearCommandTab.icns</string>
+    <key>CFBundleIconName</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.4.12</string>
-    <key>CFBundleVersion</key><string>20</string>
-    <!-- Set the HTTPS repository URL when the GitHub repository is available. -->
-    <key>GitHubRepositoryURL</key><string></string>
+    <key>CFBundleShortVersionString</key><string>0.4.28</string>
+    <key>CFBundleVersion</key><string>37</string>
+    <key>GitHubRepositoryURL</key><string>https://github.com/CorbeusUltra/clear-command-tab</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>

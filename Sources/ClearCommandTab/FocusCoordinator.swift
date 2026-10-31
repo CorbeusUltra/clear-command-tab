@@ -43,13 +43,13 @@ private enum NativeFocusBridge {
         // A validated shortcut is user intent. All-windows is reserved for app mode.
         let flags: UInt32 = 0x200 | (allWindows ? 0x100 : 0)
         let result = front(&process, window ?? kCGNullWindowID, flags)
-        if trace { revealLog.notice("front pid=\(pid) window=\(window ?? 0) flags=\(flags) result=\(result.rawValue)") }
+        if trace { revealLog.debug("front pid=\(pid) window=\(window ?? 0) flags=\(flags) result=\(result.rawValue)") }
         guard result == .success, ticket.valid else { return false }
         if let window {
             var record = KeyWindowEventRecord.bytes(window: window)
             guard ticket.valid else { return false }
             let result = record.withUnsafeMutableBufferPointer { post(&process, $0.baseAddress!) }
-            if trace { revealLog.notice("key window=\(window) result=\(result.rawValue)") }
+            if trace { revealLog.debug("key window=\(window) result=\(result.rawValue)") }
             guard result == .success else { return false }
         }
         return ticket.valid
@@ -155,7 +155,7 @@ final class SettingsFocusCoordinator {
                    FocusConfirmation.matches(target: target, expectedWindow: target,
                        frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
                        keyboardPID: observation.appPID, window: observation.window) {
-                    self.log.notice("Settings foreground and keyboard window confirmed")
+                    self.log.debug("Settings foreground and keyboard window confirmed")
                     self.cancel()
                 } else { self.requestFallback(revision, ticket: ticket) }
             }
@@ -176,7 +176,7 @@ final class SettingsFocusCoordinator {
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.intent.isCurrent(revision, now: ProcessInfo.processInfo.systemUptime),
                       ticket.valid else { return }
-                self.log.notice("Settings native focus request sent=\(sent)")
+                self.log.debug("Settings native focus request sent=\(sent)")
                 if NSApp.isActive, self.window?.isVisible == true {
                     self.window?.makeMain()
                     self.window?.makeKey()
@@ -224,34 +224,48 @@ private enum FocusActions {
         guard ticket.valid else { return .init(error: AXError.cannotComplete.rawValue, hidden: nil) }
         let result = AXUIElementSetAttributeValue(application, kAXHiddenAttribute as CFString, kCFBooleanFalse)
         let after: Bool? = ticket.valid ? value(application, kAXHiddenAttribute) : nil
-        revealLog.notice("AX reveal pid=\(pid) result=\(result.rawValue) before=\(String(describing: before), privacy: .public) after=\(String(describing: after), privacy: .public)")
+        revealLog.debug("AX reveal pid=\(pid) result=\(result.rawValue) before=\(String(describing: before), privacy: .public) after=\(String(describing: after), privacy: .public)")
         return .init(error: result.rawValue, hidden: after)
     }
 
-    static func appWindow(pid: Int32, preferred: TrackedWindow?, ticket: FocusTicket) -> TrackedWindow? {
-        if let preferred, case .window(let owner, let number) = preferred.id, owner == pid, ticket.valid,
-           let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, number) as? [[String: Any]],
-           let surface = info.first(where: { $0[kCGWindowOwnerPID as String] as? Int32 == pid &&
-               $0[kCGWindowNumber as String] as? UInt32 == number }) {
+    static func appWindow(pid: Int32, preferred: TrackedWindow?, currentSpacesOnly: Bool, ticket: FocusTicket) -> TrackedWindow? {
+        // The app's own last key window is fresher than our asynchronous history.
+        // Otherwise a missed notification can make an old browser window win forever.
+        let application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, 0.025)
+        var candidates: [AXUIElement] = []
+        for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
+            guard ticket.valid else { return nil }
+            if let element: AXUIElement = value(application, attribute) { candidates.append(element) }
+        }
+        if currentSpacesOnly, let windows: [AXUIElement] = value(application, kAXWindowsAttribute) {
+            candidates.append(contentsOf: windows.prefix(128))
+        }
+        for element in candidates {
+            guard ticket.valid else { return nil }
+            AXUIElementSetMessagingTimeout(element, 0.025)
+            guard ticket.valid, value(element, kAXMinimizedAttribute) as Bool? == false,
+                  let number = WindowIdentity.number(element),
+                  ownsWindow(pid: pid, number: number) else { continue }
+            let record = TrackedWindow(id: .window(pid: pid, number: number), title: "", element: element)
+            if !currentSpacesOnly || validWindow(record, ticket: ticket) { return record }
+        }
+        if let preferred, case .window(let owner, let number) = preferred.id, owner == pid,
+           ticket.valid, ownsWindow(pid: pid, number: number) {
             AXUIElementSetMessagingTimeout(preferred.element, 0.025)
-            // Hidden/off-Space cache entries may since have been minimized. Never
-            // use an unknown minimized state to bring such a cached window forward.
-            if surface[kCGWindowIsOnscreen as String] as? Bool == true ||
-                value(preferred.element, kAXMinimizedAttribute) as Bool? == false {
+            if WindowIdentity.number(preferred.element) == number,
+               value(preferred.element, kAXMinimizedAttribute) as Bool? == false, ticket.valid,
+               (!currentSpacesOnly || validWindow(preferred, ticket: ticket)) {
                 return preferred
             }
         }
-        let application = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(application, 0.025)
-        for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
-            guard ticket.valid else { return nil }
-            guard let element: AXUIElement = value(application, attribute) else { continue }
-            AXUIElementSetMessagingTimeout(element, 0.025)
-            guard ticket.valid, value(element, kAXMinimizedAttribute) as Bool? != true,
-                  let number = WindowIdentity.number(element) else { continue }
-            return TrackedWindow(id: .window(pid: pid, number: number), title: "", element: element)
-        }
         return nil // Windowless and minimized-only apps must not reopen documents.
+    }
+
+    private static func ownsWindow(pid: Int32, number: CGWindowID) -> Bool {
+        guard let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, number) as? [[String: Any]] else { return false }
+        return info.contains { $0[kCGWindowOwnerPID as String] as? Int32 == pid &&
+            $0[kCGWindowNumber as String] as? UInt32 == number }
     }
 
     static func validWindow(_ record: TrackedWindow, ticket: FocusTicket) -> Bool {
@@ -266,7 +280,7 @@ private enum FocusActions {
     }
 
     static func perform(target: SwitcherTargetID, record: TrackedWindow?, native: Bool,
-                        revealed: Bool, ticket: FocusTicket) -> FocusDispatch {
+                        revealed: Bool, currentSpacesOnly: Bool, ticket: FocusTicket) -> FocusDispatch {
         guard ticket.valid else { return .init() }
         let window: TrackedWindow?
         let allWindows: Bool
@@ -275,14 +289,16 @@ private enum FocusActions {
             guard let record, validWindow(record, ticket: ticket) else { return .init() }
             window = record
             allWindows = false
-        case .application(let pid):
-            window = appWindow(pid: pid, preferred: record, ticket: ticket)
+        case .application:
+            // enqueue resolves the live destination before any activation can
+            // change the application's focused/main window.
+            window = currentSpacesOnly && record.map({ !validWindow($0, ticket: ticket) }) == true ? nil : record
             // Unhide already restores the app's windows. Focus its real window
             // using exact-window focus rather than bringing every window forward.
-            allWindows = !revealed
+            allWindows = !revealed && !currentSpacesOnly
         }
         guard ticket.valid else { return .init() }
-        if revealed { revealLog.notice("resolved pid=\(target.pid) window=\(String(describing: window?.id), privacy: .public)") }
+        if revealed { revealLog.debug("resolved pid=\(target.pid) window=\(String(describing: window?.id), privacy: .public)") }
         if native {
             let number: CGWindowID?
             if case .window(_, let id) = window?.id { number = id } else { number = nil }
@@ -299,10 +315,10 @@ private enum FocusActions {
         guard ticket.valid else { return .init() }
         if let window {
             let result = AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
-            if revealed { revealLog.notice("raise result=\(result.rawValue)") }
+            if revealed { revealLog.debug("raise result=\(result.rawValue)") }
         }
         // Return codes only mean the request was sent; readback confirms actual focus.
-        return FocusDispatch(sent: ticket.valid, expectedWindow: revealed ? window?.id : nil)
+        return FocusDispatch(sent: ticket.valid, expectedWindow: window?.id)
     }
 
     static func observe(pid: Int32, ticket: FocusTicket) -> FocusObservation {
@@ -335,6 +351,7 @@ private struct PendingReveal {
     let revision: UInt64
     let ticket: FocusTicket
     let native: Bool
+    let currentSpacesOnly: Bool
     let completion: (FocusResult) -> Void
 }
 
@@ -351,6 +368,10 @@ final class FocusCoordinator {
     private var pendingReveal: PendingReveal?
     private var revealObserver: NSObjectProtocol?
     private var tracingReveal = false
+    #if FOCUS_DISPATCH_CHECKS
+    var sendForChecks: ((Bool) -> Bool)?
+    var activateForChecks: (() -> Bool)?
+    #endif
 
     init() {
         revealObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -368,7 +389,7 @@ final class FocusCoordinator {
     private let observationQueue = DispatchQueue(label: ApplicationIdentity.bundleIdentifier + ".focusReadback", qos: .utility)
 
     func beginSelection() -> SwitcherTargetID? {
-        if tracingReveal { revealLog.notice("cancel new-selection revision=\(self.policy.revision)") }
+        if tracingReveal { revealLog.debug("cancel new-selection revision=\(self.policy.revision)") }
         clearReveal()
         ticket?.cancel()
         ticket = nil
@@ -378,7 +399,7 @@ final class FocusCoordinator {
     }
 
     func cancel(reason: String = "selection-cancelled") {
-        if tracingReveal { revealLog.notice("cancel \(reason, privacy: .public) revision=\(self.policy.revision)") }
+        if tracingReveal { revealLog.debug("cancel \(reason, privacy: .public) revision=\(self.policy.revision)") }
         clearReveal()
         ticket?.cancel()
         ticket = nil
@@ -405,12 +426,19 @@ final class FocusCoordinator {
         clearReveal()
         let wasHidden = app.isHidden
         tracingReveal = revealHidden && wasHidden
+        // Read the global setting for each committed shortcut, including changes
+        // made while this process is running. An absent preference uses macOS's default.
+        CFPreferencesAppSynchronize(kCFPreferencesAnyApplication)
+        let setting = CFPreferencesCopyValue("AppleSpacesSwitchOnActivate" as CFString,
+                                             kCFPreferencesAnyApplication, kCFPreferencesCurrentUser,
+                                             kCFPreferencesAnyHost) as? Bool
         let request = PendingReveal(target: target, app: app, record: record, revision: revision,
-                                    ticket: ticket, native: Self.nativeAvailable, completion: completion)
+                                    ticket: ticket, native: dispatchNativeAvailable,
+                                    currentSpacesOnly: setting == false, completion: completion)
         if tracingReveal {
             // Register before sending the request, so even an immediate acknowledgement
             // cannot be missed. No focus action is allowed while this gate is closed.
-            revealLog.notice("request pid=\(target.pid) revision=\(revision)")
+            revealLog.debug("request pid=\(target.pid) revision=\(revision)")
             revealGate.wait(for: target.pid)
             pendingReveal = request
         }
@@ -434,7 +462,7 @@ final class FocusCoordinator {
                     if [AXError.attributeUnsupported.rawValue, AXError.notImplemented.rawValue].contains(result.error),
                        !request.app.isTerminated {
                         let sent = request.app.unhide()
-                        revealLog.notice("Cocoa reveal fallback pid=\(request.target.pid) returned=\(sent)")
+                        revealLog.debug("Cocoa reveal fallback pid=\(request.target.pid) returned=\(sent)")
                         // The user's trace showed unhide=false while the app actually
                         // reappeared. Do not abandon focus on that return value: wait
                         // for a real notification/AX observation, within this intent.
@@ -476,7 +504,7 @@ final class FocusCoordinator {
 
     private func resumeReveal(_ request: PendingReveal) {
         pendingReveal = nil
-        revealLog.notice("acknowledged pid=\(request.target.pid) revision=\(request.revision)")
+        revealLog.debug("acknowledged pid=\(request.target.pid) revision=\(request.revision)")
         // Let the current notification finish before asking the app for its now-live
         // window. This is a run-loop handoff, not an arbitrary display/focus delay.
         DispatchQueue.main.async { [weak self] in self?.enqueue(request, revealed: true) }
@@ -485,23 +513,69 @@ final class FocusCoordinator {
     private func enqueue(_ request: PendingReveal, revealed: Bool) {
         let target = request.target, ticket = request.ticket, revision = request.revision
         guard policy.isCurrent(revision), ticket.valid, !request.app.isTerminated else { return }
-        if !request.native {
-            let activated = request.app.activate(options: target == .application(target.pid) ? [.activateAllWindows] : [])
+        #if FOCUS_DISPATCH_CHECKS
+        if sendForChecks != nil { dispatchFocus(request, record: request.record, revealed: revealed); return }
+        #endif
+        queue.async { [weak self] in
+            guard ticket.valid else { return }
+            let record: TrackedWindow?
+            if case .application = target {
+                record = FocusActions.appWindow(pid: target.pid, preferred: request.record,
+                                                currentSpacesOnly: request.currentSpacesOnly, ticket: ticket)
+            } else { record = request.record }
+            DispatchQueue.main.async { [weak self] in
+                self?.dispatchFocus(request, record: record, revealed: revealed)
+            }
+        }
+    }
+
+    private var dispatchNativeAvailable: Bool {
+        #if FOCUS_DISPATCH_CHECKS
+        if sendForChecks != nil { return true }
+        #endif
+        return Self.nativeAvailable
+    }
+
+    private func dispatchFocus(_ request: PendingReveal, record: TrackedWindow?, revealed: Bool, useNative: Bool? = nil) {
+        let target = request.target, ticket = request.ticket, revision = request.revision
+        guard policy.isCurrent(revision), ticket.valid, !request.app.isTerminated else { return }
+        let native = useNative ?? request.native
+        if !native {
+            let activated: Bool
+            #if FOCUS_DISPATCH_CHECKS
+            if let activateForChecks { activated = activateForChecks() }
+            else { activated = request.app.activate(options: target == .application(target.pid) && !request.currentSpacesOnly ? [.activateAllWindows] : []) }
+            #else
+            activated = request.app.activate(options: target == .application(target.pid) && !request.currentSpacesOnly ? [.activateAllWindows] : [])
+            #endif
             if !activated {
                 // As with unhide, use actual focus observations rather than
                 // turning an advisory Cocoa return into an immediate error sound.
                 focusLog.notice("public activation returned false pid=\(target.pid)")
             }
         }
+        #if FOCUS_DISPATCH_CHECKS
+        let testSend = sendForChecks
+        #endif
         queue.async { [weak self] in
             guard ticket.valid else { return }
-            let result = FocusActions.perform(target: target, record: request.record, native: request.native,
-                                              revealed: revealed, ticket: ticket)
+            let result: FocusDispatch
+            #if FOCUS_DISPATCH_CHECKS
+            if let testSend { result = FocusDispatch(sent: testSend(native), expectedWindow: record?.id) }
+            else { result = FocusActions.perform(target: target, record: record, native: native, revealed: revealed, currentSpacesOnly: request.currentSpacesOnly, ticket: ticket) }
+            #else
+            result = FocusActions.perform(target: target, record: record, native: native, revealed: revealed, currentSpacesOnly: request.currentSpacesOnly, ticket: ticket)
+            #endif
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.policy.isCurrent(revision), ticket.valid else { return }
                 if result.sent {
                     self.confirm(target, expectedWindow: result.expectedWindow, revision: revision,
                                  ticket: ticket, attempt: 0, completion: request.completion)
+                } else if native {
+                    // Symbols can exist while their operation is unsupported.
+                    // One immediate public fallback remains inside the same valid
+                    // intent; no retry after a successful dispatch or failed readback.
+                    self.dispatchFocus(request, record: record, revealed: revealed, useNative: false)
                 } else {
                     self.complete(revision, ticket: ticket, observed: nil, target: target, completion: request.completion)
                 }
@@ -527,7 +601,7 @@ final class FocusCoordinator {
                                                         frontmostPID: frontPID, keyboardPID: observation.appPID,
                                                         window: observation.window)
                 if self.tracingReveal && attempt == 0 {
-                    revealLog.notice("readback front=\(frontPID ?? -1) keyboard=\(observation.appPID ?? -1) window=\(String(describing: observation.window), privacy: .public) matches=\(matches)")
+                    revealLog.debug("readback front=\(frontPID ?? -1) keyboard=\(observation.appPID ?? -1) window=\(String(describing: observation.window), privacy: .public) matches=\(matches)")
                 }
                 if matches {
                     self.complete(revision, ticket: ticket, observed: observation.window, target: target,
@@ -551,7 +625,7 @@ final class FocusCoordinator {
     private func complete(_ revision: UInt64, ticket: FocusTicket, observed: SwitcherTargetID?, target: SwitcherTargetID,
                           result: FocusResult = .failed, completion: (FocusResult) -> Void) {
         guard self.ticket === ticket, policy.complete(revision, observed: result == .confirmed) else { return }
-        if tracingReveal { revealLog.notice("complete revision=\(revision) result=\(result.rawValue, privacy: .public)") }
+        if tracingReveal { revealLog.debug("complete revision=\(revision) result=\(result.rawValue, privacy: .public)") }
         if result != .confirmed {
             focusLog.notice("result=\(result.rawValue, privacy: .public) pid=\(target.pid) revision=\(revision)")
         }

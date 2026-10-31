@@ -1,6 +1,21 @@
 import ClearCommandTabCore
 
 final class StatusMenuTests {
+    func testMenuActionsWaitForTrackingAndExecuteOnce() {
+        for command: StatusMenuCommand in [.settings, .about, .guide, .togglePause, .quit] {
+            var menu = StatusMenuSession()
+            menu.beginTracking()
+            menu.menuWillOpen()
+            expectTrue(menu.deferCommand(command))
+            menu.menuDidClose()
+            expectTrue(menu.isTracking)
+            expectTrue(menu.deferCommand(command))
+            expectEqual(menu.finishTracking(), command)
+            expectFalse(menu.isTracking)
+            expectNil(menu.finishTracking())
+        }
+    }
+
     func testClosingMenuDoesNotEndItsTrackingCall() {
         var menu = StatusMenuSession()
         menu.beginTracking()

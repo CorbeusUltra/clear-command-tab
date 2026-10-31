@@ -25,10 +25,8 @@ struct SettingsStatus {
 
         var title: String {
             switch self {
-            case .active: return "Shortcuts: Active"
-            case .paused: return "Shortcuts: Paused"
-            case .permissionRequired: return "Shortcuts: Inactive"
-            case .unavailable: return "Shortcuts: Unavailable"
+            case .active: return "Status: Active"
+            case .paused, .permissionRequired, .unavailable: return "Status: Inactive"
             case .preview: return "Preview — shortcuts are disabled"
             }
         }

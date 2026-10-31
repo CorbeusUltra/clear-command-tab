@@ -31,4 +31,4 @@ The application is licensed as a whole under GPL-3.0-only; this does not erase u
 - [GNU FAQ on combining GPL and other code](https://www.gnu.org/licenses/gpl-faq.en.html#WhatDoesCompatMean).
 - [AltTab's audited licence](https://github.com/lwouis/alt-tab-macos/blob/ab1bda4769d3ada5f20b3a4b6c304b975fcf61da/LICENCE.md).
 
-This decision changes licensing documents and source packaging. It does not publish a repository or distribute an application release.
+The licensing decision was made during source-packaging preparation; it does not itself distribute an application release.

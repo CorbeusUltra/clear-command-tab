@@ -17,6 +17,7 @@ final class YellowButtonInterceptor: @unchecked Sendable {
     private var starting = false
     private var port: CFMachPort?
     private var runLoop: CFRunLoop?
+    private var candidateRegions: [WindowButtonRegion]?
     private let onHide: @MainActor @Sendable (Int32) -> Void
     private let onStatus: @MainActor @Sendable (String?) -> Void
 
@@ -26,6 +27,18 @@ final class YellowButtonInterceptor: @unchecked Sendable {
     private var targetPID: Int32 = 0
     private var pressGeneration: UInt64 = 0
     private let ownPID = ProcessInfo.processInfo.processIdentifier
+    #if YELLOW_BUTTON_CHECKS
+    var hitTestForChecks: ((CGPoint) -> (element: AXUIElement, pid: Int32)?)?
+    func setEnabledForChecks(_ value: Bool) { lock.lock(); gate.setEnabled(value); lock.unlock() }
+    func receiveForChecks(type: CGEventType, event: CGEvent) -> Bool { receive(type: type, event: event) }
+    #endif
+
+    private func trusted() -> Bool {
+        #if YELLOW_BUTTON_CHECKS
+        if hitTestForChecks != nil { return true }
+        #endif
+        return AXIsProcessTrusted()
+    }
 
     init(onHide: @escaping @MainActor @Sendable (Int32) -> Void,
          onStatus: @escaping @MainActor @Sendable (String?) -> Void) {
@@ -46,9 +59,16 @@ final class YellowButtonInterceptor: @unchecked Sendable {
             thread.name = "ClearCommandTab yellow button"
             thread.qualityOfService = .userInteractive
             thread.start()
-        } else if enabled, let existingTap, let existingLoop {
+        } else if let existingTap, let existingLoop {
             CFRunLoopPerformBlock(existingLoop, CFRunLoopMode.commonModes.rawValue) { [self] in
-                guard snapshot().enabled, AXIsProcessTrusted() else { return }
+                if !snapshot().enabled {
+                    // Finish a press we already swallowed before suspending the
+                    // tap; otherwise its release would leak into the target app.
+                    if gesture.ownsPress { gesture.cancel() }
+                    else { CGEvent.tapEnable(tap: existingTap, enable: false) }
+                    return
+                }
+                guard snapshot().enabled, trusted() else { return }
                 if !CGEvent.tapIsEnabled(tap: existingTap) {
                     _ = gesture.release(sameButton: false)
                     target = nil
@@ -60,6 +80,19 @@ final class YellowButtonInterceptor: @unchecked Sendable {
         }
     }
 
+    func setCandidateRegions(_ regions: [WindowButtonRegion]?) {
+        lock.lock(); candidateRegions = regions; lock.unlock()
+    }
+
+    private func couldHitButton(_ point: CGPoint) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        // If private window identity is unavailable, retain the original public
+        // AX hit-test path rather than disabling the optional feature.
+        guard let candidateRegions else { return true }
+        guard let front = candidateRegions.first(where: { ($0.windowBounds ?? $0.bounds).contains(point) }) else { return false }
+        return front.bounds.contains(point)
+    }
+
     private func snapshot() -> YellowButtonActionGate {
         lock.lock()
         defer { lock.unlock() }
@@ -69,7 +102,7 @@ final class YellowButtonInterceptor: @unchecked Sendable {
     private func run() {
         let types: [CGEventType] = [.leftMouseDown, .leftMouseUp, .leftMouseDragged]
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
-        guard AXIsProcessTrusted(),
+        guard trusted(),
               let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
                   options: .defaultTap, eventsOfInterest: mask, callback: yellowButtonCallback,
                   userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
@@ -88,13 +121,14 @@ final class YellowButtonInterceptor: @unchecked Sendable {
             return
         }
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
         lock.lock()
         port = tap
         runLoop = CFRunLoopGetCurrent()
         starting = false
+        let enable = gate.enabled
         lock.unlock()
-        report(CGEvent.tapIsEnabled(tap: tap) ? nil : "Yellow button interception is unavailable.")
+        CGEvent.tapEnable(tap: tap, enable: enable)
+        report(!enable || CGEvent.tapIsEnabled(tap: tap) ? nil : "Yellow button interception is unavailable.")
         CFRunLoopRun()
         CGEvent.tapEnable(tap: tap, enable: false)
         CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
@@ -121,10 +155,10 @@ final class YellowButtonInterceptor: @unchecked Sendable {
             let tap = port
             lock.unlock()
             // A timeout may have delivered an event natively: never run a pending hide.
-            if AXIsProcessTrusted(), let tap {
+            if snapshot().enabled, trusted(), let tap {
                 CGEvent.tapEnable(tap: tap, enable: true)
                 report(CGEvent.tapIsEnabled(tap: tap) ? nil : "Yellow button interception stopped.")
-            } else { report("Yellow button interception requires Accessibility permission.") }
+            } else if snapshot().enabled { report("Yellow button interception requires Accessibility permission.") }
             return false
         }
 
@@ -141,11 +175,12 @@ final class YellowButtonInterceptor: @unchecked Sendable {
             } else { match = false }
             let result = gesture.release(sameButton: match)
             target = nil
+            if !state.enabled, let port { CGEvent.tapEnable(tap: port, enable: false) }
             if result.hide {
                 let pid = targetPID
                 let token = pressGeneration
                 DispatchQueue.main.async { [self] in
-                    guard snapshot().accepts(token), AXIsProcessTrusted() else { return }
+                    guard snapshot().accepts(token), trusted() else { return }
                     onHide(pid)
                 }
             }
@@ -153,7 +188,7 @@ final class YellowButtonInterceptor: @unchecked Sendable {
         }
         guard type == .leftMouseDown else { return false }
         if gesture.ownsPress { return true }
-        guard state.enabled, !modified, AXIsProcessTrusted(),
+        guard state.enabled, !modified, couldHitButton(event.location), trusted(),
               let hit = button(at: event.location), snapshot().accepts(state.generation) else { return false }
         target = hit.element
         targetPID = hit.pid
@@ -162,6 +197,9 @@ final class YellowButtonInterceptor: @unchecked Sendable {
     }
 
     private func button(at point: CGPoint) -> (element: AXUIElement, pid: Int32)? {
+        #if YELLOW_BUTTON_CHECKS
+        if let hitTestForChecks { return hitTestForChecks(point) }
+        #endif
         let deadline = ProcessInfo.processInfo.systemUptime + 0.040
         // Per-application hit testing avoids setting the system-wide AX timeout,
         // which would also change unrelated discovery/focus requests in this process.

@@ -34,4 +34,5 @@ __pycache__/
 # Superseded design experiments; selected artwork remains public
 /Design/LogoProposals/
 /Design/DarkLogoProposals/
+/Design/MonochromeProposal/
 /scripts/make-logo-proposals.swift

@@ -22,6 +22,7 @@ final class DockBadgeReader {
         let deadline = Date().addingTimeInterval(0.6)
         var remaining = 256
         var result: [String: String] = [:]
+        var currentURLs: Set<URL> = []
         func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
             AXUIElementSetMessagingTimeout(element, 0.1)
             var value: CFTypeRef?
@@ -35,6 +36,7 @@ final class DockBadgeReader {
                 guard attribute(element, kAXSubroleAttribute) as? String == "AXApplicationDockItem",
                       let text = BadgeText.normalized(attribute(element, "AXStatusLabel") as? String),
                       let url = attribute(element, "AXURL") as? URL else { return }
+                currentURLs.insert(url)
                 let id = bundleIDs[url] ?? Bundle(url: url)?.bundleIdentifier
                 if let id { bundleIDs[url] = id; result[id] = text }
                 return
@@ -43,6 +45,7 @@ final class DockBadgeReader {
             for child in children { visit(child, depth: depth + 1) }
         }
         visit(root, depth: 0)
+        bundleIDs = bundleIDs.filter { currentURLs.contains($0.key) }
         return result
     }
 }

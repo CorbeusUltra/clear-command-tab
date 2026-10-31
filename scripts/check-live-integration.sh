@@ -15,7 +15,7 @@ cp "$task_root/Resources/Info.plist" "$task_host/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier org.clearcommandtab.IntegrationChecks' "$task_host/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleName ClearCommandTab Integration Checks' "$task_host/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName ClearCommandTab Integration Checks' "$task_host/Contents/Info.plist"
-cp "$task_root/.build/LiveIntegrationChecks/checks" "$task_host/Contents/MacOS/ClearCommandTab"
+cp "$task_root/.build/LiveIntegrationChecks/checks" "$task_host/Contents/MacOS/ClearCmdTab"
 zsh "$task_root/scripts/sign-app.sh" "$task_host"
 if [[ "${CCT_LIVE_PREPARE_ONLY:-0}" == 1 ]]; then
     print "Prepared: $task_host"

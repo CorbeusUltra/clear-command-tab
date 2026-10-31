@@ -1,29 +1,48 @@
 import AppKit
 import ServiceManagement
+import ClearCommandTabCore
 
-/// Follow the window's effective appearance, including changes while About is open.
+// Match ScreenTextOCR: let AppKit draw each button's shape and state.
+private func settingsAction(_ title: String, target: AnyObject? = nil, action: Selector? = nil) -> NSButton {
+    let button = NSButton(title: title, target: target, action: action)
+    button.bezelStyle = .rounded
+    return button
+}
+
+/// Keep AppKit's native application image and its adaptive representations.
+/// Legacy resources are a fallback only when the public system image is absent.
 final class AppearanceIconView: NSImageView {
     private let lightImage: NSImage
     private let darkImage: NSImage?
+    private let systemIcon: () -> NSImage?
 
-    init(light: NSImage, dark: NSImage?) {
+    init(light: NSImage, dark: NSImage?, systemIcon: @escaping () -> NSImage? = { NSApp.applicationIconImage }) {
         lightImage = light
         darkImage = dark
+        self.systemIcon = systemIcon
         super.init(frame: .zero)
         imageScaling = .scaleProportionallyUpOrDown
-        updateImage()
+        refreshImage()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        updateImage()
+        refreshImage()
     }
 
-    private func updateImage() {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshImage()
+    }
+
+    func refreshImage() {
+        var native: NSImage?
+        effectiveAppearance.performAsCurrentDrawingAppearance { native = systemIcon() }
         let isDark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        image = isDark ? darkImage ?? lightImage : lightImage
+        image = native ?? (isDark ? darkImage ?? lightImage : lightImage)
+        needsDisplay = true
     }
 }
 
@@ -47,7 +66,7 @@ private final class SettingsPage: NSScrollView {
         documentView = document
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(stack)
         stackWidth = stack.widthAnchor.constraint(equalToConstant: 512)
@@ -93,12 +112,20 @@ enum SettingsWindowFrame {
 final class SettingsAppWindow: NSWindow {
     var onQuit: () -> Void = { NSApp.terminate(nil) }
 
+    @objc func quitApplication(_ sender: Any?) { onQuit() }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection([.command, .option, .shift, .control])
-        if event.type == .keyDown, modifiers == .command,
-           event.charactersIgnoringModifiers?.lowercased() == "q" {
-            onQuit()
-            return true
+        if event.type == .keyDown, modifiers == .command {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "w":
+                // Standard AppKit close-button action: honors the window delegate,
+                // sends windowWillClose and keeps this accessory service running.
+                performClose(nil)
+                return true
+            case "q": quitApplication(nil); return true
+            default: break
+            }
         }
         return super.performKeyEquivalent(with: event)
     }
@@ -106,6 +133,7 @@ final class SettingsAppWindow: NSWindow {
 
 @MainActor
 final class SettingsWindow: NSWindowController, NSWindowDelegate {
+    enum Page: Int { case settings, guide, about }
     var onShowIcon: ((Bool) -> Void)?
     var onTogglePause: (() -> Void)?
     var onCheckPermission: (() -> Void)?
@@ -120,32 +148,42 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     private let yellowStatusLabel = NSTextField(wrappingLabelWithString: "")
     private let permissionLabel = NSTextField(labelWithString: "Not checked")
     private let permissionSymbol = NSImageView()
-    private let grantButton = NSButton(title: "Grant permission…", target: nil, action: nil)
+    private let grantButton = settingsAction("Grant permission…")
     private let bundleInfo: [String: Any]
     private let aboutIcon: AppearanceIconView
     private let showIcon = NSButton(checkboxWithTitle: "Show menu bar icon", target: nil, action: nil)
     private let launchAtLogin = NSButton(checkboxWithTitle: "Launch at login", target: nil, action: nil)
-    private let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
+    private let pauseButton = settingsAction("Pause")
     private let yellowButton = NSButton(checkboxWithTitle: "Yellow button hides app", target: nil, action: nil)
 
-    init(info: [String: Any] = Bundle.main.infoDictionary ?? [:], darkIcon: NSImage? = nil) {
+    init(info: [String: Any] = Bundle.main.infoDictionary ?? [:], darkIcon: NSImage? = nil,
+         resourceBundle: Bundle = .main) {
         bundleInfo = info
-        let bundledDarkIcon = Bundle.main.url(forResource: "ClearCommandTab-dark", withExtension: "icns")
+        // NSApp supplies the native renderer; keep the bundled bitmaps solely
+        // for the exceptional case where that public image is unavailable.
+        let bundledLightIcon = resourceBundle.url(forResource: "ClearCommandTab", withExtension: "icns")
             .flatMap { NSImage(contentsOf: $0) }
-        aboutIcon = AppearanceIconView(light: NSApp.applicationIconImage, dark: darkIcon ?? bundledDarkIcon)
+        let bundledDarkIcon = resourceBundle.url(forResource: "ClearCommandTab-dark", withExtension: "icns")
+            .flatMap { NSImage(contentsOf: $0) }
+        aboutIcon = AppearanceIconView(light: bundledLightIcon ?? NSApp.applicationIconImage,
+                                       dark: darkIcon ?? bundledDarkIcon)
         tabs.tabStyle = .toolbar
         tabs.transitionOptions = []
         let window = SettingsAppWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 300),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "ClearCommandTab Settings"
+        window.title = "\(ApplicationIdentity.displayName) Settings"
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
         addTab(to: tabs, title: "Settings", symbol: "gearshape", content: settingsPage())
-        addTab(to: tabs, title: "Guide", symbol: "questionmark.circle", content: guidePage())
+        addTab(to: tabs, title: "Guide", symbol: "book", content: guidePage())
         addTab(to: tabs, title: "About", symbol: "info.circle", content: aboutPage())
         window.contentViewController = tabs
-        tabs.onSelection = { [weak self] in self?.fitSelectedPage(animate: true) }
+        tabs.onSelection = { [weak self] in
+            guard let self else { return }
+            if self.tabs.selectedTabViewItemIndex == Page.about.rawValue { self.aboutIcon.refreshImage() }
+            self.fitSelectedPage(animate: true)
+        }
         fitSelectedPage()
         window.center()
     }
@@ -169,8 +207,13 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     }
 
     override func showWindow(_ sender: Any?) {
+        if tabs.selectedTabViewItemIndex == Page.about.rawValue { aboutIcon.refreshImage() }
         fitSelectedPage()
         super.showWindow(sender)
+    }
+
+    func selectPage(_ page: Page) {
+        tabs.selectedTabViewItemIndex = page.rawValue
     }
 
     func windowWillClose(_ notification: Notification) { onClose?() }
@@ -247,8 +290,8 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         glassRow.addArrangedSubview(glassChoice)
         stack.addArrangedSubview(glassRow)
         explanation(GlassProfile.altTabAvailable
-            ? "Choose a glass finish or an opaque Matte background."
-            : "Glass finishes use the same fallback on this Mac. Matte is opaque.", in: stack)
+            ? "Choose a glass finish or an opaque matte background."
+            : "Glass finishes use the same fallback on this Mac. The matte option is opaque.", in: stack)
 
         section("Startup & menu bar", in: stack)
         launchAtLogin.target = self
@@ -260,12 +303,12 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             let visibilityRow = NSStackView()
             visibilityRow.spacing = 12
             visibilityRow.addArrangedSubview(showIcon)
-            visibilityRow.addArrangedSubview(NSButton(title: "Menu Bar Settings…", target: self, action: #selector(openMenuBarSettings)))
+            visibilityRow.addArrangedSubview(settingsAction("Menu Bar Settings…", target: self, action: #selector(openMenuBarSettings)))
             stack.addArrangedSubview(visibilityRow)
-            explanation("Icon missing? Enable ClearCommandTab in System Settings → Menu Bar → Allow in the Menu Bar.", in: stack)
+            explanation("Icon missing? Enable \(ApplicationIdentity.displayName) in System Settings → Menu Bar → Allow in the Menu Bar.", in: stack)
         } else {
             stack.addArrangedSubview(showIcon)
-            explanation("If you hide the icon, reopen ClearCommandTab from Applications or Spotlight and turn this option on.", in: stack)
+            explanation("If you hide the icon, reopen \(ApplicationIdentity.displayName) from Applications or Spotlight and turn this option on.", in: stack)
         }
 
         section("Window behavior", in: stack)
@@ -286,7 +329,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             yellowIcon.widthAnchor.constraint(equalToConstant: 16),
             yellowIcon.heightAnchor.constraint(equalToConstant: 16),
         ])
-        explanation("Click the yellow minimize button to hide the entire app. Modified clicks keep macOS behavior.", in: stack)
+        explanation("Normally, the yellow button minimizes a window to the Dock. Enable this option to hide all windows of the app instead, just like Command-H. Command-click or Option-click keeps the normal macOS behavior.", in: stack)
 
         section("Status & permissions", in: stack)
         let accessibilityRow = NSStackView()
@@ -306,7 +349,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         stack.addArrangedSubview(accessibilityRow)
         let permissionRow = NSStackView()
         permissionRow.spacing = 8
-        let checkButton = NSButton(title: "Check permission", target: self, action: #selector(checkPermission))
+        let checkButton = settingsAction("Check permission", target: self, action: #selector(checkPermission))
         checkButton.identifier = NSUserInterfaceItemIdentifier("checkPermission")
         permissionRow.addArrangedSubview(checkButton)
         grantButton.identifier = NSUserInterfaceItemIdentifier("grantPermission")
@@ -337,6 +380,13 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             stack.addArrangedSubview(label)
             label.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
+        let quit = settingsAction("Quit \(ApplicationIdentity.displayName)", target: window,
+                            action: #selector(SettingsAppWindow.quitApplication(_:)))
+        quit.identifier = NSUserInterfaceItemIdentifier("quitApplication")
+        quit.keyEquivalent = "q"
+        quit.keyEquivalentModifierMask = .command
+        stack.setCustomSpacing(20, after: stack.arrangedSubviews.last!)
+        stack.addArrangedSubview(quit)
         updateStatus(SettingsStatus(permissionChecked: false, accessibilityGranted: false,
                                     keyboardRunning: false, paused: false))
         return view
@@ -381,7 +431,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         section("While choosing", in: stack)
         explanation("Hold Shift to move backward, use ← / →, or press Escape to cancel. Release Command to confirm. Move the pointer to select an icon, or click to confirm.", in: stack)
         section("Menu shortcuts", in: stack)
-        explanation("Right-click the menu bar icon for Settings (⌘,) or Quit (⌘Q). Left-click to pause or resume. Pausing suspends shortcuts and yellow-button hiding.", in: stack)
+        explanation("Click the menu bar icon for Pause / Resume, Settings (⌘,), About, Guide or Quit (⌘Q). Pausing suspends shortcuts and yellow-button hiding; Pause / Resume is also available in Settings.", in: stack)
         return view
     }
 
@@ -397,25 +447,24 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             icon.heightAnchor.constraint(equalToConstant: 88),
         ])
         stack.addArrangedSubview(icon)
-        let title = NSTextField(labelWithString: "ClearCommandTab")
+        let title = NSTextField(labelWithString: ApplicationIdentity.displayName)
         title.font = .systemFont(ofSize: 22, weight: .semibold)
         stack.addArrangedSubview(title)
         let info = bundleInfo
         let version = info["CFBundleShortVersionString"] as? String ?? "Development"
-        let build = info["CFBundleVersion"] as? String
-        let versionLabel = NSTextField(labelWithString: "Version \(version)")
+        let build = (info["CFBundleVersion"] as? String).map { " (\($0))" } ?? ""
+        let versionLabel = NSTextField(labelWithString: "Version \(version)\(build)")
+        versionLabel.identifier = NSUserInterfaceItemIdentifier("aboutVersion")
         versionLabel.textColor = .secondaryLabelColor
         stack.addArrangedSubview(versionLabel)
-        if let build {
-            let buildLabel = NSTextField(labelWithString: "Build \(build)")
-            buildLabel.font = .systemFont(ofSize: 11)
-            buildLabel.textColor = .secondaryLabelColor
-            buildLabel.toolTip = "Identifies this particular build of the app."
-            stack.addArrangedSubview(buildLabel)
-            stack.setCustomSpacing(24, after: buildLabel)
-        } else { stack.setCustomSpacing(24, after: versionLabel) }
-        let description = NSTextField(labelWithString: "Native app for macos, enables better window switching appearance.")
+        stack.setCustomSpacing(20, after: versionLabel)
+        let description = NSTextField(wrappingLabelWithString: "Free, open-source, native macOS app.\nSwitch between visible apps with Command-Tab.")
+        description.identifier = NSUserInterfaceItemIdentifier("aboutDescription")
+        description.alignment = .center
+        description.translatesAutoresizingMaskIntoConstraints = false
+        description.setContentCompressionResistancePriority(.required, for: .vertical)
         stack.addArrangedSubview(description)
+        description.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         let authorText = NSMutableAttributedString(string: "Author : CorbeusUltra", attributes: [
             .font: NSFont.systemFont(ofSize: 12),
             .foregroundColor: NSColor.secondaryLabelColor,
@@ -431,23 +480,13 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         author.allowsEditingTextAttributes = true
         author.toolTip = authorURL.absoluteString
         stack.addArrangedSubview(author)
-        stack.setCustomSpacing(24, after: author)
-        if repositoryURL != nil {
-            let repository = NSButton(title: "GitHub repository ↗", target: self, action: #selector(openRepository))
-            repository.identifier = NSUserInterfaceItemIdentifier("repositoryLink")
-            repository.bezelStyle = .inline
-            repository.toolTip = repositoryURL?.absoluteString
-            stack.addArrangedSubview(repository)
-        } else {
-            let placeholder = NSTextField(labelWithString: "GitHub repository — Coming soon")
-            placeholder.identifier = NSUserInterfaceItemIdentifier("repositoryPlaceholder")
-            placeholder.textColor = .secondaryLabelColor
-            stack.addArrangedSubview(placeholder)
-        }
-        let privacy = NSTextField(labelWithString: "Runs locally. No accounts or analytics.")
-        privacy.font = .systemFont(ofSize: 12)
-        privacy.textColor = .secondaryLabelColor
-        stack.addArrangedSubview(privacy)
+        stack.setCustomSpacing(20, after: author)
+        let repository = NSButton(title: "GitHub repository ↗", target: self, action: #selector(openRepository))
+        repository.identifier = NSUserInterfaceItemIdentifier("repositoryLink")
+        repository.bezelStyle = .inline
+        repository.isEnabled = repositoryURL != nil
+        repository.toolTip = repositoryURL?.absoluteString
+        stack.addArrangedSubview(repository)
         return view
     }
 

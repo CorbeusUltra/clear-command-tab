@@ -26,6 +26,7 @@ let statusMenuChecks = StatusMenuTests()
 let yellowButtonChecks = YellowButtonTests()
 let settingsFocusChecks = SettingsFocusTests()
 let cases: [(String, () -> Void)] = [
+    ("menu page and pause actions wait for tracking and execute once", statusMenuChecks.testMenuActionsWaitForTrackingAndExecuteOnce),
     ("Settings focus has one fallback and expires after 800 ms", settingsFocusChecks.testOneFallbackAndBoundedLifetime),
     ("Settings completion, closing and new intent invalidate old callbacks", settingsFocusChecks.testClosingExternalActionAndNewOpeningInvalidateCallbacks),
     ("yellow button owns one matching click, never unrelated releases", yellowButtonChecks.testPlainClickAndUnrelatedRelease),

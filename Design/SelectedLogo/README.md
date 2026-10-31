@@ -1,22 +1,20 @@
-# Selected light and dark logos
+# Selected monochrome logos
 
 ![Selected light and dark artwork](comparison.png)
 
-The light variant is the original blue tile with white arrows. The dark variant keeps the exact same arrow geometry and rounded tile, with black arrows and a deeper blue gradient. The blue remains bright enough to distinguish the black strokes at About size.
+- Light: light-gray rounded tile (`#F7F7F7`), black arrows.
+- Dark: charcoal rounded tile (approximately `#1F1F1F`), white arrows. About uses the native system application image; these raw variants remain a fallback when that image is unavailable. Finder/Spotlight have native light/dark variants compiled from `Resources/AppIcon.icon`.
+- Menu bar: the same arrows without the tile, rendered as an 18-point template image so macOS supplies the tint. Unavailable and paused status indicators keep their existing behavior.
 
-The artwork is drawn directly by AppKit in `scripts/make-icon.swift`, with shared `NSBezierPath` geometry. Only the gradient and arrow color differ. No external artwork or generated raster imagery is used.
+The original arrow paths and tile geometry are preserved. Both tiles match ScreenshotOCR’s neutral backgrounds (0.97 light / 0.12 dark) and retain a transparent exterior. The blue artwork in earlier proposal folders is historical.
 
-- `light/` and `dark/` contain transparent PNGs at 88, 176, 512 and 1024 pixels for About previews and future GitHub artwork.
-- `comparison.png` shows the selected pair in their intended appearances.
-- About follows the window's effective appearance, including changes while the window is open. If the dark resource is missing in a development run, it retains the original image.
-- The app bundle contains `ClearCommandTab.icns` and `ClearCommandTab-dark.icns`. The standard Finder/app icon remains the original; About uses the dark resource in dark appearance. The menu-bar template symbol continues to use the tint supplied by macOS.
-
-Regenerate assets or an individual icon:
+The shared source is `scripts/make-icon.swift`. `light/` and `dark/` contain transparent PNGs at 88, 176, 512 and 1024 pixels. The build script packages `ClearCommandTab.icns`, `ClearCommandTab-dark.icns` and `ClearCommandTab-menu.png` before signing. It also compiles `AppIcon.icon` into `Assets.car` using Xcode's macOS `actool`. Its alpha mask is generated from the same `drawArrows` paths, with matching neutral backgrounds and black/white arrow specializations and no glass/specular effects. Selected PNGs and About ICNS files use the same backgrounds; the arrow mask and menu template are unchanged. This pipeline handles only ClearCommandTab's own logo.
 
 ```sh
 swift scripts/make-icon.swift --selected-assets Design/SelectedLogo
 swift scripts/make-icon.swift /tmp/ClearCommandTab.icns
 swift scripts/make-icon.swift --dark /tmp/ClearCommandTab-dark.icns
+swift scripts/make-icon.swift --menu /tmp/ClearCommandTab-menu.png
+swift scripts/make-icon.swift --native-glyph /tmp/ClearCommandTab-arrows.png
+zsh scripts/check-icon-catalog.sh
 ```
-
-The default production generator output remains byte-identical to the original light icon. `scripts/build-app.sh` packages both resources and signs the resulting bundle.

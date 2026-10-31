@@ -21,6 +21,11 @@ final class SwitcherModelTests {
         history.activate(2)
         expectEqual(history.visible.map(\.id), [2, 3, 1])
         expectEqual(history.rememberedOrder, ["app.2", "app.3", "app.1"])
+        var transient = ApplicationHistory(excludedID: 99, rememberedOrder: ["pid:123", "app.1"])
+        transient.update([.init(id: 123, persistenceID: "pid:123", name: "Interpreter"), app(1, "A")])
+        transient.activate(123)
+        expectEqual(transient.order.first, 123)
+        expectEqual(transient.rememberedOrder, ["app.1"])
     }
 
     func testHiddenHistorySurvivesUnhideAndTermination() {
